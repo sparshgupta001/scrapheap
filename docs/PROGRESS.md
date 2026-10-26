@@ -172,64 +172,6 @@
 - What the next task depends on:
   - Server integration should own one Scheduler from one goroutine, add `Now` to each event, forward returned actions, and translate accepted result/job completion state into dashboard and metric events.
 
-## Dashboard branch alignment (2026-10-26 11:55 Asia/Calcutta)
-- What was built:
-  - Preserved the in-progress dashboard HTTP code in commit `72b712d` and merged `origin/main` into the dedicated `r4-dashboard` branch.
-  - Kept the team versions of `AGENTS.md`, `README.md`, `cmd/server/main.go`, `docs/PROGRESS.md`, `docs/protocol.md`, `internal/proto`, and `internal/sched`.
-  - Aligned the module path with `github.com/scrap-heap/backend`, restored the Go 1.22 directive, and added the allowed WebSocket and QR dependencies.
-  - Removed the Makefile and updated dashboard imports to the shared module path.
-- Files created/changed:
-  - `AGENTS.md`, `README.md`, `cmd/server/main.go`, `docs/protocol.md`, `internal/proto/*`, and `internal/sched/*` — preserved from `origin/main`.
-  - `go.mod`, `go.sum` — shared module path and required dependencies; `github.com/coder/websocket` uses v1.8.13 to retain Go 1.22 compatibility.
-  - `cmd/server/qr.go`, `cmd/server/dashws.go`, `internal/dashhttp/*` — dashboard helpers and HTTP endpoints with corrected imports.
-  - `Makefile` — removed as required; `docs/PROGRESS.md` — this report.
-- Public interfaces:
-  - Module path: `github.com/scrap-heap/backend`.
-  - Existing dashboard wrappers: `RegisterQR(*http.ServeMux, string)` and `RegisterDash(*http.ServeMux, *metrics.Hub)`.
-- How to run/test:
-  - `go vet ./...` — passed (exit 0).
-  - `go build ./...` — passed (exit 0).
-  - `go test -count=1 ./...` — passed (exit 0); `internal/dashhttp`, `internal/metrics`, `internal/proto`, and `internal/sched` passed; `cmd/server` has no tests.
-- Decisions & deviations from this spec, and why:
-  - The existing WebSocket v1.8.15 requires Go 1.23, so v1.8.13 was selected after confirming its Go directive is 1.19; the dashboard HTTP implementation only uses the same allowed module.
-  - The `go mod tidy -go=1.22` invocation was rejected by the installed Go tool; the module directive was restored directly and ordinary `go mod tidy` then passed.
-- Known issues / TODOs / things you were unsure about:
-  - The preserved QR and dashboard HTTP code still needs the endpoint behavior and LAN-selection refinements listed in the next dashboard task.
-  - The remote team branch was fetched and merged locally; nothing has been pushed.
-- What the next task depends on:
-  - Implement and test the full dashboard HTTP contract in `internal/dashhttp`, building on the aligned module and team protocol/scheduler packages.
-
-## Dashboard HTTP and subscription contract (2026-10-26 11:55 Asia/Calcutta)
-- What was built:
-  - Implemented pure LAN IPv4 selection with interface-name filtering, RFC1918 preference ordering, `JOIN_HOST` override, and clear JSON 503 responses when no address is available.
-  - Added 512px no-store QR PNG and join URL handlers, plus CSV download and run-again responses with the specified status codes and header.
-  - Reworked the dashboard Hub around 64-message buffered subscriptions, immediate snapshot delivery, raw JSON publishing, subscriber counts, nonblocking fan-out, and 15-second WebSocket pings.
-  - Added endpoint, WebSocket lifecycle/fan-out, stalled-subscriber, QR selection, PNG signature, CSV header, and run-again tests.
-- Files created/changed:
-  - `internal/dashhttp/qr.go` — LAN selection, join URL, and QR HTTP handlers.
-  - `internal/dashhttp/dashws.go` — dashboard WebSocket, CSV, and run-again HTTP routes.
-  - `internal/dashhttp/qr_test.go`, `internal/dashhttp/dashws_test.go` — endpoint and subscription behavior tests.
-  - `internal/metrics/hub.go` — `Subscribe`, `Publish`, `CurrentSnapshotJSON`, `SubscriberCount`, and WebSocket streaming lifecycle.
-  - `docs/PROGRESS.md` — this report.
-- Public interfaces:
-  - `(*Hub).Subscribe() (<-chan []byte, func())`, `(*Hub).Publish([]byte)`, `(*Hub).CurrentSnapshotJSON() []byte`, and `(*Hub).SubscriberCount() int`.
-  - `(*Hub).OnRunAgain func()` — callback used by POST `/api/run-again`.
-  - `RegisterQR(*http.ServeMux, string)` and `RegisterDash(*http.ServeMux, *metrics.Hub)`.
-- How to run/test:
-  - `go vet ./...` — passed (exit 0).
-  - `go build ./...` — passed (exit 0).
-  - `go test -count=1 ./...` — passed (exit 0); all 4 tested packages passed and `cmd/server` has no tests.
-  - `go test -count=1 ./internal/dashhttp ./internal/metrics` — passed after the final endpoint test update.
-  - `go test -race ./...` — failed before tests ran: `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`; this machine's GCC cannot build the race runtime.
-- Decisions & deviations from this spec, and why:
-  - A subscriber whose 64-message queue fills is removed and its channel closed; this preserves nonblocking delivery to other subscribers and bounds per-client memory.
-  - `JOIN_HOST` is accepted as the host override verbatim after trimming whitespace; otherwise only usable non-loopback IPv4 addresses are considered.
-- Known issues / TODOs / things you were unsure about:
-  - Real phone QR scanning is not verified in this environment.
-  - `cmd/dashdev`, dashboard UI, README handoff, and live simulator verification remain.
-- What the next task depends on:
-  - The dashboard dev server can use the completed collector, Hub, QR, WebSocket, CSV, and run-again APIs.
-
 ## Coordinator hub and worker endpoint (2026-10-26 12:04 Asia/Calcutta)
 - What was built:
   - Added a hub loop that owns the scheduler, worker registry, current job, and accepted tile store; WebSocket reader/writer goroutines communicate with that loop through events and bounded 64-message send queues.
@@ -323,102 +265,6 @@
 - What the next task depends on:
   - Worker-side protocol tests should use the same documented TASK bytes and RESULT header/payload vector.
 
-## Metrics tile payload and workload metadata (2026-10-26 12:27 Asia/Calcutta)
-- What was built:
-  - Expanded accepted-task recording with compute time, attempt number, verified 64x64 RGBA storage, and first-result-wins duplicate handling.
-  - Added the `tile_done` dashboard event, completed-tile metadata, and copied pixel retrieval methods.
-  - Added scheduler-mode-based CSV config labels and moved baseline `B` rows before other runs.
-  - Updated and added tests for event emission, duplicate payloads, tile queries, pixel length, and CSV configs.
-- Files created/changed:
-  - `internal/metrics/metrics.go` — stored tile info and pixels, scheduler config, and extended acceptance API.
-  - `internal/metrics/snapshot.go` — `TileDoneEvent` and `TileInfo` types; snapshot fields unchanged.
-  - `internal/metrics/csv.go` — baseline-first ordering.
-  - `internal/metrics/metrics_test.go` — acceptance, metadata, event, and config coverage.
-  - `cmd/dashdev/sim.go` — updated call signature pending full simulator rendering implementation.
-  - `docs/PROGRESS.md` — this report.
-- Public interfaces:
-  - `TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte)`.
-  - `TileRGBA(taskID int) ([]byte, bool)`, `TilesInfo() []TileInfo`, `SetScheduler(mode string)`.
-  - `TileInfo` JSON fields: `task`, `device`, `computeMs`, `attempts`; `tile_done` JSON fields: `type`, `task`, `device`, `computeMs`, `attempt`, `t`.
-- How to run/test:
-  - `go test -count=1 ./internal/metrics` — passed (exit 0).
-- Decisions & deviations from this spec, and why:
-  - Only a verified tile with exactly 16,384 RGBA bytes retains pixels; failed verification and malformed lengths retain metadata but have no retrievable pixel bytes.
-  - The existing `SetConfig("B")` hook marks baseline status; other CSV config values are generated from `SetScheduler` and the run's joined-device count.
-- Known issues / TODOs / things you were unsure about:
-  - HTTP tile routes, event documentation, and rendering simulator calls will be completed in the subsequent tasks.
-- What the next task depends on:
-  - `internal/dashhttp` can expose `TileRGBA` and `TilesInfo` for image catch-up and per-tile requests.
-
-## Tile image HTTP endpoints (2026-10-26 12:28 Asia/Calcutta)
-- What was built:
-  - Added GET `/api/tile/{id}` with id validation, 404 for absent pixels, exact octet-stream output, and no-store caching.
-  - Added GET `/api/tiles` returning the collector's done-tile metadata for mid-run dashboard catch-up.
-  - Added tests for invalid/out-of-range/undone IDs, exact 16,384-byte tile payload, headers, and JSON metadata.
-- Files created/changed:
-  - `internal/dashhttp/dashws.go` — tile image and catch-up routes.
-  - `internal/dashhttp/dashws_test.go` — HTTP status, byte-size, payload, and metadata tests.
-  - `docs/PROGRESS.md` — this report.
-- Public interfaces:
-  - GET `/api/tile/{id}` accepts integer IDs 0 through 1023 and returns `application/octet-stream`.
-  - GET `/api/tiles` returns a JSON array of `metrics.TileInfo`.
-- How to run/test:
-  - `go test -count=1 ./internal/dashhttp ./internal/metrics` — passed (exit 0).
-- Decisions & deviations from this spec, and why:
-  - A completed-but-unverified or wrong-length tile has metadata but no image bytes, so `/api/tile/{id}` correctly remains 404.
-- Known issues / TODOs / things you were unsure about:
-  - The revised dashboard will use `/api/tiles` for its initial completed-tile inventory and `/api/tile/{id}` for pixels.
-- What the next task depends on:
-  - Document the exact event/payload mapping and tile API contract before implementing the browser tile renderer.
-
-## Dashboard contract documentation update (2026-10-26 12:29 Asia/Calcutta)
-- What was built:
-  - Documented the fractal canvas dimensions, tile payload, variable tile cost, and row-major 32x32 task mapping.
-  - Added the dashboard `tile_done` event and mapping from server `TILE_DONE`.
-  - Documented `/api/tile/{id}`, `/api/tiles`, the extended collector acceptance signature, scheduler mode config labels, and HELLO field ownership.
-- Files created/changed:
-  - `docs/dashboard-contract.md` — revised dashboard, tile payload, event, HTTP, HELLO, and CSV contract.
-  - `docs/PROGRESS.md` — this report.
-- Public interfaces:
-  - No code interfaces changed; contract now documents `TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte)`.
-- How to run/test:
-  - Documentation-only change; no validation command was run for this step.
-- Decisions & deviations from this spec, and why:
-  - Snapshot fields remain documented exactly as implemented; tile-specific state is obtained from tile HTTP APIs and `tile_done`.
-- Known issues / TODOs / things you were unsure about:
-  - Browser UI and the simulator will be validated in subsequent tasks.
-- What the next task depends on:
-  - The simulator and UI will consume the documented tile IDs, events, and tile APIs without extending the snapshot schema.
-
-## Mandelbrot dashboard simulator (2026-10-26 12:30 Asia/Calcutta)
-- What was built:
-  - Added `cmd/dashdev` with `-addr`, `PORT`, `-speed`, and `-sched aware|pull` support and dashboard/join URL startup output.
-  - Simulated the specified per-device rate schedule and jitter, device lifecycle, Pixel lease requeues, attempts, and scheduler-mode assignments.
-  - Lazily rendered each completed task as a real 64x64 Mandelbrot RGBA tile and recorded compute time, attempt, and pixels through the Collector.
-  - Added unit/integration tests for rate schedule, tile ordering/assignment, requeueing, emitted lifecycle, rendered pixels, attempts, and baseline CSV config.
-- Files created/changed:
-  - `cmd/dashdev/main.go` — dev HTTP server, static assets, dashboard endpoints, flags, and simulator wiring.
-  - `cmd/dashdev/sim.go` — deterministic simulation schedule, Mandelbrot renderer, and task assignment.
-  - `cmd/dashdev/sim_test.go` — simulation and pure scheduling tests.
-  - `internal/metrics/hub.go` — config-aware run-again callback for `?config=B`.
-  - `docs/PROGRESS.md` — this report.
-- Public interfaces:
-  - `go run ./cmd/dashdev [-addr :8080] [-speed 1] [-sched aware|pull]`.
-  - POST `/api/run-again?config=B` starts the laptop-only baseline; POST without config starts a scripted run.
-- How to run/test:
-  - `go vet ./...` — passed (exit 0).
-  - `go build ./...` — passed (exit 0).
-  - `go test -count=1 ./...` — passed (five packages passed; `cmd/server` has no tests).
-  - `go test -count=1 ./cmd/dashdev` — passed, including complete image-producing and baseline simulations.
-- Decisions & deviations from this spec, and why:
-  - The Mandelbrot renderer uses a small fixed complex-plane scale near the requested center, 420 iterations, smooth HSV coloring, and cardioid/bulb shortcuts to keep pure-Go rendering responsive.
-  - Simulated compute times are 500-900ms for sampled heavy tiles and 120-450ms for light tiles; actual tile pixels are calculated on completion.
-- Known issues / TODOs / things you were unsure about:
-  - This step validates simulator output through Go tests; browser visual acceptance waits for the dashboard UI.
-  - Race tests remain unavailable because the installed GCC supports only 32-bit mode; this was verified in the earlier race attempt.
-- What the next task depends on:
-  - The UI can use `/api/tiles`, `/api/tile/{id}`, `tile_done`, and snapshots from this server to paint and annotate completed tiles.
-
 ## Server wiring and mock worker (2026-10-26 12:42 Asia/Calcutta)
 - What was built:
   - Replaced the placeholder server entry point with configurable coordinator startup, signal handling, graceful HTTP shutdown, LAN URL reporting, worker WebSocket mounting, and static serving.
@@ -461,32 +307,6 @@
   - Teammates can replace mock benchmark/tile work with the browser WASM worker while preserving `docs/protocol.md`.
   - The dashboard and QR owners can add their route registrations in the server entry point when their files are ready.
 
-## Dashboard image UI checkpoint (2026-10-26 12:58 Asia/Calcutta)
-- What was built:
-  - Added a dark, projector-oriented dashboard layout with QR/join URL, summary metrics, progress, verification, chart, device list, events, and controls.
-  - Added the image canvas renderer with checker state, lease/requeue overlays, bounded eight-request image fetching, tile metadata catch-up, and per-device tint.
-  - Added tile hover details, computed per-device average timing, chart join/leave markers, reconnect backoff, fullscreen/debug/tint shortcuts, and run-again failure toast handling.
-- Files created/changed:
-  - `web/dash.html` — dashboard markup and canvas/control surfaces.
-  - `web/dash.css` — responsive dark display styling and layout.
-  - `web/dash.js` — snapshots/events, image fetch/draw, tint, chart, reconnect, and interactions.
-  - `docs/PROGRESS.md` — this checkpoint report.
-- Public interfaces:
-  - Browser uses `/api/joinurl`, `/qr.png`, `/ws/dash`, `/api/tiles`, `/api/tile/{id}`, `/api/export.csv`, and POST `/api/run-again`.
-  - No snapshot fields were added.
-- How to run/test:
-  - `node --check web/dash.js` — passed (exit 0).
-  - `go vet ./...` — passed (exit 0).
-  - `go build ./...` — passed (exit 0).
-  - `go test -count=1 ./...` — passed; `cmd/dashdev`, `internal/dashhttp`, `internal/metrics`, `internal/proto`, and `internal/sched` passed; `cmd/server` has no tests.
-- Decisions & deviations from this spec, and why:
-  - This checkpoint contains the UI implementation in progress; browser visual acceptance and mid-run second-tab catch-up have not yet been verified.
-  - Canvas uses a 2048x2048 backing/offscreen image and scales to available CSS space; browser device-pixel ratio is applied to the visible image and chart canvases.
-- Known issues / TODOs / things you were unsure about:
-  - Full browser visual validation, image fetch throughput, average timing display behavior on catch-up, and completion-state UX remain to be checked.
-  - Race tests cannot run with the installed 32-bit-only GCC; regular tests passed.
-- What the next task depends on:
-  - Start `cmd/dashdev` at `-speed 4` and verify the render, tint, tile hover, requeue/refill, completed verification, CSV, and second-tab catch-up before marking UI complete.
 ## Collector and snapshot adjustments (2026-10-26 13:05 Asia/Calcutta)
 - What was built:
   - Added verifier status reporting: accepted results are `Passed` only with a configured verifier; the default accept-all path reports `NotChecked`. Rejected results emit `VerifyFailed` with the mismatch count.
@@ -693,3 +513,23 @@
 - What the next task depends on:
   - Use the printed LAN Worker URL to verify the same flow from phones on the coordinator's network.
   - Dashboard work can poll `/api/job` and fetch accepted `/api/tile/{taskId}` payloads.
+
+## Dashboard merge rollback (2026-10-26 15:30 Asia/Calcutta)
+- What was built:
+  - Reverted the dashboard merge, removing its dashboard UI, simulator, metrics, and dashboard HTTP/QR wiring.
+  - Preserved the worker/server and WASM work added outside that merge.
+- Files created/changed:
+  - `.gitignore` — retained the benchmark output ignore entry and removed dashboard-only ignore rules.
+  - `cmd/dashdev/`, `cmd/server/dashws.go`, `cmd/server/qr.go`, `docs/dashboard-contract.md`, `internal/dashhttp/`, `internal/metrics/`, and `web/dash.*` — removed dashboard merge files.
+  - `go.mod`, `go.sum` — removed the dashboard-only QR dependency and restored pre-dashboard module requirements.
+  - `docs/PROGRESS.md` — removed dashboard merge reports and recorded this rollback.
+- Public interfaces:
+  - No dashboard interfaces remain from the reverted merge.
+- How to run/test:
+  - No tests were run for this rollback.
+- Decisions & deviations from this spec, and why:
+  - Used a mainline revert of the dashboard merge to preserve subsequent worker/server work.
+- Known issues / TODOs / things you were unsure about:
+  - None identified during the rollback.
+- What the next task depends on:
+  - Dashboard work can be reapplied later against the current hub collector and server APIs.
