@@ -28,7 +28,8 @@ type Hub struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	OnRunAgain func()
+	OnRunAgain           func()
+	OnRunAgainWithConfig func(string)
 }
 
 // NewHub creates a Hub and broadcasts collector snapshots every 500ms.

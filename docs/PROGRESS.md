@@ -297,3 +297,32 @@
   - Browser UI and the simulator will be validated in subsequent tasks.
 - What the next task depends on:
   - The simulator and UI will consume the documented tile IDs, events, and tile APIs without extending the snapshot schema.
+
+## Mandelbrot dashboard simulator (2026-10-26 12:30 Asia/Calcutta)
+- What was built:
+  - Added `cmd/dashdev` with `-addr`, `PORT`, `-speed`, and `-sched aware|pull` support and dashboard/join URL startup output.
+  - Simulated the specified per-device rate schedule and jitter, device lifecycle, Pixel lease requeues, attempts, and scheduler-mode assignments.
+  - Lazily rendered each completed task as a real 64x64 Mandelbrot RGBA tile and recorded compute time, attempt, and pixels through the Collector.
+  - Added unit/integration tests for rate schedule, tile ordering/assignment, requeueing, emitted lifecycle, rendered pixels, attempts, and baseline CSV config.
+- Files created/changed:
+  - `cmd/dashdev/main.go` — dev HTTP server, static assets, dashboard endpoints, flags, and simulator wiring.
+  - `cmd/dashdev/sim.go` — deterministic simulation schedule, Mandelbrot renderer, and task assignment.
+  - `cmd/dashdev/sim_test.go` — simulation and pure scheduling tests.
+  - `internal/metrics/hub.go` — config-aware run-again callback for `?config=B`.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - `go run ./cmd/dashdev [-addr :8080] [-speed 1] [-sched aware|pull]`.
+  - POST `/api/run-again?config=B` starts the laptop-only baseline; POST without config starts a scripted run.
+- How to run/test:
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed (five packages passed; `cmd/server` has no tests).
+  - `go test -count=1 ./cmd/dashdev` — passed, including complete image-producing and baseline simulations.
+- Decisions & deviations from this spec, and why:
+  - The Mandelbrot renderer uses a small fixed complex-plane scale near the requested center, 420 iterations, smooth HSV coloring, and cardioid/bulb shortcuts to keep pure-Go rendering responsive.
+  - Simulated compute times are 500-900ms for sampled heavy tiles and 120-450ms for light tiles; actual tile pixels are calculated on completion.
+- Known issues / TODOs / things you were unsure about:
+  - This step validates simulator output through Go tests; browser visual acceptance waits for the dashboard UI.
+  - Race tests remain unavailable because the installed GCC supports only 32-bit mode; this was verified in the earlier race attempt.
+- What the next task depends on:
+  - The UI can use `/api/tiles`, `/api/tile/{id}`, `tile_done`, and snapshots from this server to paint and annotate completed tiles.
