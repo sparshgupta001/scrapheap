@@ -40,12 +40,11 @@ Pushed over WebSocket `/ws/dash` every 500 ms:
 ```
 
 ### Worker HELLO (from R3, informational: R1 maps it into DeviceJoined)
-- `deviceId`: Same for all threads of one device.
-- `label`: e.g. "Pixel 7" (shortened userAgent fallback).
-- `cores`: `navigator.hardwareConcurrency`.
-- `threadId`: Worker thread identifier.
-
-Threads sharing a `deviceId` map to ONE device bar on the dashboard; `threads` is how many threads joined for that device.
+ONE WebSocket and ONE HELLO per DEVICE, not per thread.
+Fields: `deviceId`, `label`, `cores`, `userAgent`, `threads`. There is NO `threadId`.
+- One HELLO = one device bar. `threads` is the thread count shown on that bar.
+- If `label` is empty, derive a short readable name from `userAgent` (e.g. "iPhone Safari", "Android Chrome", "Windows Chrome", else "Device").
+- Reconnecting device (`deviceId` already seen) reuses that device: sets state back to "active", preserves `tilesDone`, does not create a second bar.
 
 ---
 
