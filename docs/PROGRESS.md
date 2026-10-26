@@ -1,5 +1,4 @@
 # Progress log
-
 ## Scaffold and protocol (2026-10-26 10:26 Asia/Calcutta)
 
 - What was built:
@@ -173,6 +172,64 @@
 - What the next task depends on:
   - Server integration should own one Scheduler from one goroutine, add `Now` to each event, forward returned actions, and translate accepted result/job completion state into dashboard and metric events.
 
+## Dashboard branch alignment (2026-10-26 11:55 Asia/Calcutta)
+- What was built:
+  - Preserved the in-progress dashboard HTTP code in commit `72b712d` and merged `origin/main` into the dedicated `r4-dashboard` branch.
+  - Kept the team versions of `AGENTS.md`, `README.md`, `cmd/server/main.go`, `docs/PROGRESS.md`, `docs/protocol.md`, `internal/proto`, and `internal/sched`.
+  - Aligned the module path with `github.com/scrap-heap/backend`, restored the Go 1.22 directive, and added the allowed WebSocket and QR dependencies.
+  - Removed the Makefile and updated dashboard imports to the shared module path.
+- Files created/changed:
+  - `AGENTS.md`, `README.md`, `cmd/server/main.go`, `docs/protocol.md`, `internal/proto/*`, and `internal/sched/*` — preserved from `origin/main`.
+  - `go.mod`, `go.sum` — shared module path and required dependencies; `github.com/coder/websocket` uses v1.8.13 to retain Go 1.22 compatibility.
+  - `cmd/server/qr.go`, `cmd/server/dashws.go`, `internal/dashhttp/*` — dashboard helpers and HTTP endpoints with corrected imports.
+  - `Makefile` — removed as required; `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - Module path: `github.com/scrap-heap/backend`.
+  - Existing dashboard wrappers: `RegisterQR(*http.ServeMux, string)` and `RegisterDash(*http.ServeMux, *metrics.Hub)`.
+- How to run/test:
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed (exit 0); `internal/dashhttp`, `internal/metrics`, `internal/proto`, and `internal/sched` passed; `cmd/server` has no tests.
+- Decisions & deviations from this spec, and why:
+  - The existing WebSocket v1.8.15 requires Go 1.23, so v1.8.13 was selected after confirming its Go directive is 1.19; the dashboard HTTP implementation only uses the same allowed module.
+  - The `go mod tidy -go=1.22` invocation was rejected by the installed Go tool; the module directive was restored directly and ordinary `go mod tidy` then passed.
+- Known issues / TODOs / things you were unsure about:
+  - The preserved QR and dashboard HTTP code still needs the endpoint behavior and LAN-selection refinements listed in the next dashboard task.
+  - The remote team branch was fetched and merged locally; nothing has been pushed.
+- What the next task depends on:
+  - Implement and test the full dashboard HTTP contract in `internal/dashhttp`, building on the aligned module and team protocol/scheduler packages.
+
+## Dashboard HTTP and subscription contract (2026-10-26 11:55 Asia/Calcutta)
+- What was built:
+  - Implemented pure LAN IPv4 selection with interface-name filtering, RFC1918 preference ordering, `JOIN_HOST` override, and clear JSON 503 responses when no address is available.
+  - Added 512px no-store QR PNG and join URL handlers, plus CSV download and run-again responses with the specified status codes and header.
+  - Reworked the dashboard Hub around 64-message buffered subscriptions, immediate snapshot delivery, raw JSON publishing, subscriber counts, nonblocking fan-out, and 15-second WebSocket pings.
+  - Added endpoint, WebSocket lifecycle/fan-out, stalled-subscriber, QR selection, PNG signature, CSV header, and run-again tests.
+- Files created/changed:
+  - `internal/dashhttp/qr.go` — LAN selection, join URL, and QR HTTP handlers.
+  - `internal/dashhttp/dashws.go` — dashboard WebSocket, CSV, and run-again HTTP routes.
+  - `internal/dashhttp/qr_test.go`, `internal/dashhttp/dashws_test.go` — endpoint and subscription behavior tests.
+  - `internal/metrics/hub.go` — `Subscribe`, `Publish`, `CurrentSnapshotJSON`, `SubscriberCount`, and WebSocket streaming lifecycle.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - `(*Hub).Subscribe() (<-chan []byte, func())`, `(*Hub).Publish([]byte)`, `(*Hub).CurrentSnapshotJSON() []byte`, and `(*Hub).SubscriberCount() int`.
+  - `(*Hub).OnRunAgain func()` — callback used by POST `/api/run-again`.
+  - `RegisterQR(*http.ServeMux, string)` and `RegisterDash(*http.ServeMux, *metrics.Hub)`.
+- How to run/test:
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed (exit 0); all 4 tested packages passed and `cmd/server` has no tests.
+  - `go test -count=1 ./internal/dashhttp ./internal/metrics` — passed after the final endpoint test update.
+  - `go test -race ./...` — failed before tests ran: `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`; this machine's GCC cannot build the race runtime.
+- Decisions & deviations from this spec, and why:
+  - A subscriber whose 64-message queue fills is removed and its channel closed; this preserves nonblocking delivery to other subscribers and bounds per-client memory.
+  - `JOIN_HOST` is accepted as the host override verbatim after trimming whitespace; otherwise only usable non-loopback IPv4 addresses are considered.
+- Known issues / TODOs / things you were unsure about:
+  - Real phone QR scanning is not verified in this environment.
+  - `cmd/dashdev`, dashboard UI, README handoff, and live simulator verification remain.
+- What the next task depends on:
+  - The dashboard dev server can use the completed collector, Hub, QR, WebSocket, CSV, and run-again APIs.
+
 ## Coordinator hub and worker endpoint (2026-10-26 12:04 Asia/Calcutta)
 - What was built:
   - Added a hub loop that owns the scheduler, worker registry, current job, and accepted tile store; WebSocket reader/writer goroutines communicate with that loop through events and bounded 64-message send queues.
@@ -216,6 +273,32 @@
   - `cmd/server` should mount `Hub.Handler()` at `/ws/worker`, call `Run(ctx)`, and connect a real collector to `internal/metrics` and the dashboard feed.
   - The worker must follow `docs/protocol.md`, especially WELCOME followed by active JOB_STARTED and per-connection logical request slots.
 
+## C Mandelbrot WASM kernel source (2026-10-26 12:24 Asia/Calcutta)
+- What was built:
+  - Added a C `process_tile` implementation matching the protocol's tile inputs and row-major RGBA output.
+  - Defined black interior pixels, opaque alpha, and a deterministic integer escape-iteration palette.
+  - Documented the Emscripten build command and browser worker responsibilities.
+- Files created/changed:
+  - `wasm/mandelbrot.c` — C source for rendering one Mandelbrot tile.
+  - `wasm/README.md` — kernel contract, color rule, and WASM build instructions.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - C ABI: `void process_tile(uint8_t *out, double x0, double y0, double scale, int w, int h, int max_iter)`.
+  - Output is exactly `w*h*4` caller-allocated bytes in row-major RGBA order; alpha is 255.
+- How to run/test:
+  - `gcc -std=c11 -Wall -Wextra -Werror -c wasm/mandelbrot.c -o /tmp/scrapheap-mandelbrot.o` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./... -race` — passed (hub, proto, and sched packages; cmd/server has no tests).
+  - Emscripten WASM build — not run; `emcc` is not installed in this environment.
+- Decisions & deviations from this spec, and why:
+  - Kept transport and WASM memory allocation in the browser worker, leaving the kernel focused on pixel computation as specified by the shared contract.
+  - Chose and documented a deterministic integer palette because the protocol specified RGBA layout but did not specify colors.
+- Known issues / TODOs / things you were unsure about:
+  - Teammates implementing the worker and server-side verifier must use the same color rule; the benchmark hash depends on exact output bytes.
+  - The `.wasm` module and generated Emscripten JavaScript loader have not been built or run because `emcc` is unavailable here.
+- What the next task depends on:
+  - Install/use Emscripten to build the module, then have the browser worker load it, allocate output memory, call `process_tile`, and package the bytes in a RESULT frame.
+
 ## Cross-language protocol test vectors (2026-10-26 12:26 Asia/Calcutta)
 - What was built:
   - Added a TASK encoder/decoder test using the worker-produced 48-byte fixture and compared every decoded field, including y0, scale, and maxIter.
@@ -239,6 +322,102 @@
   - None identified for these test vectors.
 - What the next task depends on:
   - Worker-side protocol tests should use the same documented TASK bytes and RESULT header/payload vector.
+
+## Metrics tile payload and workload metadata (2026-10-26 12:27 Asia/Calcutta)
+- What was built:
+  - Expanded accepted-task recording with compute time, attempt number, verified 64x64 RGBA storage, and first-result-wins duplicate handling.
+  - Added the `tile_done` dashboard event, completed-tile metadata, and copied pixel retrieval methods.
+  - Added scheduler-mode-based CSV config labels and moved baseline `B` rows before other runs.
+  - Updated and added tests for event emission, duplicate payloads, tile queries, pixel length, and CSV configs.
+- Files created/changed:
+  - `internal/metrics/metrics.go` — stored tile info and pixels, scheduler config, and extended acceptance API.
+  - `internal/metrics/snapshot.go` — `TileDoneEvent` and `TileInfo` types; snapshot fields unchanged.
+  - `internal/metrics/csv.go` — baseline-first ordering.
+  - `internal/metrics/metrics_test.go` — acceptance, metadata, event, and config coverage.
+  - `cmd/dashdev/sim.go` — updated call signature pending full simulator rendering implementation.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - `TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte)`.
+  - `TileRGBA(taskID int) ([]byte, bool)`, `TilesInfo() []TileInfo`, `SetScheduler(mode string)`.
+  - `TileInfo` JSON fields: `task`, `device`, `computeMs`, `attempts`; `tile_done` JSON fields: `type`, `task`, `device`, `computeMs`, `attempt`, `t`.
+- How to run/test:
+  - `go test -count=1 ./internal/metrics` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - Only a verified tile with exactly 16,384 RGBA bytes retains pixels; failed verification and malformed lengths retain metadata but have no retrievable pixel bytes.
+  - The existing `SetConfig("B")` hook marks baseline status; other CSV config values are generated from `SetScheduler` and the run's joined-device count.
+- Known issues / TODOs / things you were unsure about:
+  - HTTP tile routes, event documentation, and rendering simulator calls will be completed in the subsequent tasks.
+- What the next task depends on:
+  - `internal/dashhttp` can expose `TileRGBA` and `TilesInfo` for image catch-up and per-tile requests.
+
+## Tile image HTTP endpoints (2026-10-26 12:28 Asia/Calcutta)
+- What was built:
+  - Added GET `/api/tile/{id}` with id validation, 404 for absent pixels, exact octet-stream output, and no-store caching.
+  - Added GET `/api/tiles` returning the collector's done-tile metadata for mid-run dashboard catch-up.
+  - Added tests for invalid/out-of-range/undone IDs, exact 16,384-byte tile payload, headers, and JSON metadata.
+- Files created/changed:
+  - `internal/dashhttp/dashws.go` — tile image and catch-up routes.
+  - `internal/dashhttp/dashws_test.go` — HTTP status, byte-size, payload, and metadata tests.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - GET `/api/tile/{id}` accepts integer IDs 0 through 1023 and returns `application/octet-stream`.
+  - GET `/api/tiles` returns a JSON array of `metrics.TileInfo`.
+- How to run/test:
+  - `go test -count=1 ./internal/dashhttp ./internal/metrics` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - A completed-but-unverified or wrong-length tile has metadata but no image bytes, so `/api/tile/{id}` correctly remains 404.
+- Known issues / TODOs / things you were unsure about:
+  - The revised dashboard will use `/api/tiles` for its initial completed-tile inventory and `/api/tile/{id}` for pixels.
+- What the next task depends on:
+  - Document the exact event/payload mapping and tile API contract before implementing the browser tile renderer.
+
+## Dashboard contract documentation update (2026-10-26 12:29 Asia/Calcutta)
+- What was built:
+  - Documented the fractal canvas dimensions, tile payload, variable tile cost, and row-major 32x32 task mapping.
+  - Added the dashboard `tile_done` event and mapping from server `TILE_DONE`.
+  - Documented `/api/tile/{id}`, `/api/tiles`, the extended collector acceptance signature, scheduler mode config labels, and HELLO field ownership.
+- Files created/changed:
+  - `docs/dashboard-contract.md` — revised dashboard, tile payload, event, HTTP, HELLO, and CSV contract.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - No code interfaces changed; contract now documents `TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte)`.
+- How to run/test:
+  - Documentation-only change; no validation command was run for this step.
+- Decisions & deviations from this spec, and why:
+  - Snapshot fields remain documented exactly as implemented; tile-specific state is obtained from tile HTTP APIs and `tile_done`.
+- Known issues / TODOs / things you were unsure about:
+  - Browser UI and the simulator will be validated in subsequent tasks.
+- What the next task depends on:
+  - The simulator and UI will consume the documented tile IDs, events, and tile APIs without extending the snapshot schema.
+
+## Mandelbrot dashboard simulator (2026-10-26 12:30 Asia/Calcutta)
+- What was built:
+  - Added `cmd/dashdev` with `-addr`, `PORT`, `-speed`, and `-sched aware|pull` support and dashboard/join URL startup output.
+  - Simulated the specified per-device rate schedule and jitter, device lifecycle, Pixel lease requeues, attempts, and scheduler-mode assignments.
+  - Lazily rendered each completed task as a real 64x64 Mandelbrot RGBA tile and recorded compute time, attempt, and pixels through the Collector.
+  - Added unit/integration tests for rate schedule, tile ordering/assignment, requeueing, emitted lifecycle, rendered pixels, attempts, and baseline CSV config.
+- Files created/changed:
+  - `cmd/dashdev/main.go` — dev HTTP server, static assets, dashboard endpoints, flags, and simulator wiring.
+  - `cmd/dashdev/sim.go` — deterministic simulation schedule, Mandelbrot renderer, and task assignment.
+  - `cmd/dashdev/sim_test.go` — simulation and pure scheduling tests.
+  - `internal/metrics/hub.go` — config-aware run-again callback for `?config=B`.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - `go run ./cmd/dashdev [-addr :8080] [-speed 1] [-sched aware|pull]`.
+  - POST `/api/run-again?config=B` starts the laptop-only baseline; POST without config starts a scripted run.
+- How to run/test:
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed (five packages passed; `cmd/server` has no tests).
+  - `go test -count=1 ./cmd/dashdev` — passed, including complete image-producing and baseline simulations.
+- Decisions & deviations from this spec, and why:
+  - The Mandelbrot renderer uses a small fixed complex-plane scale near the requested center, 420 iterations, smooth HSV coloring, and cardioid/bulb shortcuts to keep pure-Go rendering responsive.
+  - Simulated compute times are 500-900ms for sampled heavy tiles and 120-450ms for light tiles; actual tile pixels are calculated on completion.
+- Known issues / TODOs / things you were unsure about:
+  - This step validates simulator output through Go tests; browser visual acceptance waits for the dashboard UI.
+  - Race tests remain unavailable because the installed GCC supports only 32-bit mode; this was verified in the earlier race attempt.
+- What the next task depends on:
+  - The UI can use `/api/tiles`, `/api/tile/{id}`, `tile_done`, and snapshots from this server to paint and annotate completed tiles.
 
 ## Server wiring and mock worker (2026-10-26 12:42 Asia/Calcutta)
 - What was built:
@@ -282,6 +461,32 @@
   - Teammates can replace mock benchmark/tile work with the browser WASM worker while preserving `docs/protocol.md`.
   - The dashboard and QR owners can add their route registrations in the server entry point when their files are ready.
 
+## Dashboard image UI checkpoint (2026-10-26 12:58 Asia/Calcutta)
+- What was built:
+  - Added a dark, projector-oriented dashboard layout with QR/join URL, summary metrics, progress, verification, chart, device list, events, and controls.
+  - Added the image canvas renderer with checker state, lease/requeue overlays, bounded eight-request image fetching, tile metadata catch-up, and per-device tint.
+  - Added tile hover details, computed per-device average timing, chart join/leave markers, reconnect backoff, fullscreen/debug/tint shortcuts, and run-again failure toast handling.
+- Files created/changed:
+  - `web/dash.html` — dashboard markup and canvas/control surfaces.
+  - `web/dash.css` — responsive dark display styling and layout.
+  - `web/dash.js` — snapshots/events, image fetch/draw, tint, chart, reconnect, and interactions.
+  - `docs/PROGRESS.md` — this checkpoint report.
+- Public interfaces:
+  - Browser uses `/api/joinurl`, `/qr.png`, `/ws/dash`, `/api/tiles`, `/api/tile/{id}`, `/api/export.csv`, and POST `/api/run-again`.
+  - No snapshot fields were added.
+- How to run/test:
+  - `node --check web/dash.js` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed; `cmd/dashdev`, `internal/dashhttp`, `internal/metrics`, `internal/proto`, and `internal/sched` passed; `cmd/server` has no tests.
+- Decisions & deviations from this spec, and why:
+  - This checkpoint contains the UI implementation in progress; browser visual acceptance and mid-run second-tab catch-up have not yet been verified.
+  - Canvas uses a 2048x2048 backing/offscreen image and scales to available CSS space; browser device-pixel ratio is applied to the visible image and chart canvases.
+- Known issues / TODOs / things you were unsure about:
+  - Full browser visual validation, image fetch throughput, average timing display behavior on catch-up, and completion-state UX remain to be checked.
+  - Race tests cannot run with the installed 32-bit-only GCC; regular tests passed.
+- What the next task depends on:
+  - Start `cmd/dashdev` at `-speed 4` and verify the render, tint, tile hover, requeue/refill, completed verification, CSV, and second-tab catch-up before marking UI complete.
 ## Collector and snapshot adjustments (2026-10-26 13:05 Asia/Calcutta)
 - What was built:
   - Added verifier status reporting: accepted results are `Passed` only with a configured verifier; the default accept-all path reports `NotChecked`. Rejected results emit `VerifyFailed` with the mismatch count.
@@ -321,33 +526,6 @@
 - What the next task depends on:
   - The dashboard can consume the expanded `/api/job` snapshot and `VerifyStatus` collector results.
   - QR generation can use `Snapshot.PublicHost` when it is configured.
-<<<<<<< HEAD
-## C Mandelbrot WASM kernel source (2026-10-26 12:24 Asia/Calcutta)
-- What was built:
-  - Added a C `process_tile` implementation matching the protocol's tile inputs and row-major RGBA output.
-  - Defined black interior pixels, opaque alpha, and a deterministic integer escape-iteration palette.
-  - Documented the Emscripten build command and browser worker responsibilities.
-- Files created/changed:
-  - `wasm/mandelbrot.c` — C source for rendering one Mandelbrot tile.
-  - `wasm/README.md` — kernel contract, color rule, and WASM build instructions.
-  - `docs/PROGRESS.md` — this task report.
-- Public interfaces:
-  - C ABI: `void process_tile(uint8_t *out, double x0, double y0, double scale, int w, int h, int max_iter)`.
-  - Output is exactly `w*h*4` caller-allocated bytes in row-major RGBA order; alpha is 255.
-- How to run/test:
-  - `gcc -std=c11 -Wall -Wextra -Werror -c wasm/mandelbrot.c -o /tmp/scrapheap-mandelbrot.o` — passed (exit 0).
-  - `go vet ./...` — passed (exit 0).
-  - `go test ./... -race` — passed (hub, proto, and sched packages; cmd/server has no tests).
-  - Emscripten WASM build — not run; `emcc` is not installed in this environment.
-- Decisions & deviations from this spec, and why:
-  - Kept transport and WASM memory allocation in the browser worker, leaving the kernel focused on pixel computation as specified by the shared contract.
-  - Chose and documented a deterministic integer palette because the protocol specified RGBA layout but did not specify colors.
-- Known issues / TODOs / things you were unsure about:
-  - Teammates implementing the worker and server-side verifier must use the same color rule; the benchmark hash depends on exact output bytes.
-  - The `.wasm` module and generated Emscripten JavaScript loader have not been built or run because `emcc` is unavailable here.
-- What the next task depends on:
-  - Install/use Emscripten to build the module, then have the browser worker load it, allocate output memory, call `process_tile`, and package the bytes in a RESULT frame.
-
 ## Browser check for C Mandelbrot WASM kernel (2026-10-26 13:24 Asia/Calcutta)
 - What was built:
   - Added a standalone browser page that loads the generated WASM module, renders the protocol benchmark tile, displays it on a canvas, and prints render time and SHA-256.
@@ -415,44 +593,6 @@
 - What the next task depends on:
   - The worker page should reuse the same 64x64 tile parameters and copy returned pixels into its displayed 2048x2048 canvas while actual coordinator assignments arrive over WebSocket.
 
-## Connect WASM browser worker to Go coordinator (2026-10-26 14:51 Asia/Calcutta)
-- What was built:
-  - Added a module Web Worker that loads the C/WASM kernel, sends HELLO and BENCH_RESULT, maintains heartbeats, requests tasks, computes TASK frames, and returns binary RESULT frames.
-  - The page now opens `/ws/worker`, displays tiles after the server accepts them, and exports the current canvas as PNG.
-  - Added `/worker` as an alias for `demo.html` when serving `-web wasm`; corrected ACK and JOB_DONE directions in the protocol documentation.
-- Files created/changed:
-  - `wasm/client-worker.js` — WebSocket protocol client and WASM tile execution.
-  - `wasm/demo.js` — starts the browser worker and draws accepted tile results.
-  - `wasm/demo.html` — describes and hosts the connected browser worker.
-  - `cmd/server/api.go` — serves the demo at `/worker` under the configured static root.
-  - `cmd/server/api_test.go` — verifies that `/worker` serves the demo page.
-  - `docs/protocol.md` — corrects server-to-worker ACK/JOB_DONE directions and records the shipped benchmark hash.
-  - `wasm/README.md` — documents running the connected demo with the Go coordinator.
-  - `docs/PROGRESS.md` — this task report.
-- Public interfaces:
-  - Start the coordinator with `go run ./cmd/server -web wasm`; open `http://localhost:8080/worker`.
-  - The browser sends HELLO, BENCH_RESULT, HEARTBEAT, and REQUEST_TASK JSON; it receives WELCOME, JOB_STARTED, ACK, and JOB_DONE JSON plus binary TASK frames, and sends binary RESULT frames.
-  - One Web Worker thread is used per browser tab. Tiles are drawn locally after server ACK; the page does not yet assemble tiles returned by other browsers.
-- How to run/test:
-  - `gofmt -w cmd/server/api.go cmd/server/api_test.go` — passed.
-  - `node --check wasm/client-worker.js` and `node --check wasm/demo.js` — passed.
-  - `go vet ./...` — passed (exit 0).
-  - `go test ./... -race` — passed: server, hub, proto, and sched packages passed; cmd/mockworker has no tests.
-  - `git diff --check` — passed (exit 0).
-  - Manual browser/server run: `go run ./cmd/server -web wasm -addr 127.0.0.1:8181 -host 127.0.0.1 -verbose`, then Firefox at `/worker` — passed; the browser registered with the benchmark hash, received and returned all 1,024 tiles, and the Go server logged job completion in 13.337s.
-- Decisions & deviations from this spec, and why:
-  - Kept one WebSocket and one compute thread per browser tab for the first end-to-end connection; worker thread pooling can be added after this path is stable.
-  - Used the same-origin WebSocket URL and selected `ws` or `wss` from the page protocol so LAN clients connect to the host serving the page.
-  - Added a fixed benchmark hash fallback for plain HTTP LAN contexts where Web Crypto is unavailable; secure contexts compute and compare the hash at runtime.
-- Known issues / TODOs / things you were unsure about:
-  - Each browser displays only tiles it computed. A dashboard still needs to fetch accepted tiles from `/api/tile/{taskId}` to assemble the cluster-wide image.
-  - Firefox reported 0–1 ms compute times for many 64x64 tiles because browser timing precision is coarse at this tile size; throughput registration succeeded.
-  - The HTTP LAN benchmark-hash fallback assumes the shipped WASM module and color rule are unchanged; update its constant when rebuilding the kernel with different output.
-- What the next task depends on:
-  - The dashboard can assemble the global canvas from `/api/job` and `/api/tile/{taskId}` or add a dashboard WebSocket feed.
-  - Additional Web Worker threads can share the same device connection after defining task dispatch across client-side worker slots.
-=======
-
 ## Repeatable kill-recovery benchmark (2026-10-26 14:43 Asia/Calcutta)
 - What was built:
   - Added a Windows PowerShell harness that preflights its port, builds the real server and mockworker binaries into a temporary directory, and runs one baseline plus configurable kill-recovery repetitions.
@@ -494,4 +634,40 @@
   - Raw per-run logs are kept under ignored `bench/out/` for local inspection.
 - What the next task depends on:
   - Repeat with `-KillRuns N` after changes to lease handling or mockworker timing; use another `-Port` if the default test port is occupied.
->>>>>>> 071907e (Bench: kill-recovery end-to-end script)
+## Connect WASM browser worker to Go coordinator (2026-10-26 14:51 Asia/Calcutta)
+- What was built:
+  - Added a module Web Worker that loads the C/WASM kernel, sends HELLO and BENCH_RESULT, maintains heartbeats, requests tasks, computes TASK frames, and returns binary RESULT frames.
+  - The page now opens `/ws/worker`, displays tiles after the server accepts them, and exports the current canvas as PNG.
+  - Added `/worker` as an alias for `demo.html` when serving `-web wasm`; corrected ACK and JOB_DONE directions in the protocol documentation.
+- Files created/changed:
+  - `wasm/client-worker.js` — WebSocket protocol client and WASM tile execution.
+  - `wasm/demo.js` — starts the browser worker and draws accepted tile results.
+  - `wasm/demo.html` — describes and hosts the connected browser worker.
+  - `cmd/server/api.go` — serves the demo at `/worker` under the configured static root.
+  - `cmd/server/api_test.go` — verifies that `/worker` serves the demo page.
+  - `docs/protocol.md` — corrects server-to-worker ACK/JOB_DONE directions and records the shipped benchmark hash.
+  - `wasm/README.md` — documents running the connected demo with the Go coordinator.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - Start the coordinator with `go run ./cmd/server -web wasm`; open `http://localhost:8080/worker`.
+  - The browser sends HELLO, BENCH_RESULT, HEARTBEAT, and REQUEST_TASK JSON; it receives WELCOME, JOB_STARTED, ACK, and JOB_DONE JSON plus binary TASK frames, and sends binary RESULT frames.
+  - One Web Worker thread is used per browser tab. Tiles are drawn locally after server ACK; the page does not yet assemble tiles returned by other browsers.
+- How to run/test:
+  - `gofmt -w cmd/server/api.go cmd/server/api_test.go` — passed.
+  - `node --check wasm/client-worker.js` and `node --check wasm/demo.js` — passed.
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./... -race` — passed: server, hub, proto, and sched packages passed; cmd/mockworker has no tests.
+  - `git diff --check` — passed (exit 0).
+  - Manual browser/server run: `go run ./cmd/server -web wasm -addr 127.0.0.1:8181 -host 127.0.0.1 -verbose`, then Firefox at `/worker` — passed; the browser registered with the benchmark hash, received and returned all 1,024 tiles, and the Go server logged job completion in 13.337s.
+- Decisions & deviations from this spec, and why:
+  - Kept one WebSocket and one compute thread per browser tab for the first end-to-end connection; worker thread pooling can be added after this path is stable.
+  - Used the same-origin WebSocket URL and selected `ws` or `wss` from the page protocol so LAN clients connect to the host serving the page.
+  - Added a fixed benchmark hash fallback for plain HTTP LAN contexts where Web Crypto is unavailable; secure contexts compute and compare the hash at runtime.
+- Known issues / TODOs / things you were unsure about:
+  - Each browser displays only tiles it computed. A dashboard still needs to fetch accepted tiles from `/api/tile/{taskId}` to assemble the cluster-wide image.
+  - Firefox reported 0–1 ms compute times for many 64x64 tiles because browser timing precision is coarse at this tile size; throughput registration succeeded.
+  - The HTTP LAN benchmark-hash fallback assumes the shipped WASM module and color rule are unchanged; update its constant when rebuilding the kernel with different output.
+- What the next task depends on:
+  - The dashboard can assemble the global canvas from `/api/job` and `/api/tile/{taskId}` or add a dashboard WebSocket feed.
+  - Additional Web Worker threads can share the same device connection after defining task dispatch across client-side worker slots.
+
