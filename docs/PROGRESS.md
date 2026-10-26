@@ -309,7 +309,7 @@
   - `go fmt ./...` — passed.
   - `go vet ./...` — passed (exit 0).
   - `go build ./...` — passed (exit 0).
-  - `go test ./...` — passed (exit 0): server, hub, proto, and scheduler packages passed; mockworker has no tests.
+  - `go test ./...` — the restricted run failed because Windows denied the integration tests' loopback sockets; rerun with loopback access passed (exit 0): server, hub, proto, and scheduler packages passed; mockworker has no tests.
   - `go test ./... -race` — failed before tests ran: `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in` while building `runtime/cgo`.
 - Decisions & deviations from this spec, and why:
   - Snapshot mode is derived from the scheduler mode and always serialized as `pull` or `aware`; the legacy CLI value `plain` is normalized to `pull`.
@@ -321,6 +321,7 @@
 - What the next task depends on:
   - The dashboard can consume the expanded `/api/job` snapshot and `VerifyStatus` collector results.
   - QR generation can use `Snapshot.PublicHost` when it is configured.
+<<<<<<< HEAD
 ## C Mandelbrot WASM kernel source (2026-10-26 12:24 Asia/Calcutta)
 - What was built:
   - Added a C `process_tile` implementation matching the protocol's tile inputs and row-major RGBA output.
@@ -450,3 +451,47 @@
 - What the next task depends on:
   - The dashboard can assemble the global canvas from `/api/job` and `/api/tile/{taskId}` or add a dashboard WebSocket feed.
   - Additional Web Worker threads can share the same device connection after defining task dispatch across client-side worker slots.
+=======
+
+## Repeatable kill-recovery benchmark (2026-10-26 14:43 Asia/Calcutta)
+- What was built:
+  - Added a Windows PowerShell harness that preflights its port, builds the real server and mockworker binaries into a temporary directory, and runs one baseline plus configurable kill-recovery repetitions.
+  - The script starts each job before workers connect, kills only the first mockworker device in kill runs, verifies requeue reasons/device counts/completion/hash consistency, and cleans up only processes it launched.
+  - Ignored generated benchmark logs under `bench/out/`.
+- Files created/changed:
+  - `bench/kill-recovery.ps1` — repeatable baseline and worker-kill end-to-end run with summary table and process cleanup.
+  - `.gitignore` — ignores `bench/out/` run logs.
+  - `docs/PROGRESS.md` — test results and observed log excerpts for this task.
+- Public interfaces:
+  - Script parameters: `-Port` (default `18080`) and `-KillRuns` (default `3`).
+  - Invocation: `./bench/kill-recovery.ps1 -Port 18080 -KillRuns 3`.
+- How to run/test:
+  - `./bench/kill-recovery.ps1 -Port 18080 -KillRuns 3` — passed baseline and all 3 kill runs; every run reached 1024/1024 tiles and produced exactly one JOB_DONE.
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test ./...` — passed (exit 0): server, hub, proto, and scheduler packages passed; mockworker has no tests.
+  - `git diff --check` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - The mockworker `gradient(task)` uses only tile parameters/coordinates (`task.X`, `task.Y`, and pixel position); it does not use device ID or attempt. Hash equality is therefore a valid kill-recovery assertion.
+  - Relevant server log records (each kill row shows job start before the first device-left line):
+    - Baseline: `2026/10/26 14:42:18 job started id=1 tiles=1024`; `2026/10/26 14:42:28 job done id=1 imageHash=d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671 wall=10.266s`; then device-left lines for baseline devices 3, 1, and 2.
+    - Kill 1: `2026/10/26 14:42:29 job started id=1 tiles=1024`; `2026/10/26 14:42:34 task requeued task=460 attempt=1 reason=device_disconnected`; `2026/10/26 14:42:34 task requeued task=461 attempt=1 reason=device_disconnected`; `2026/10/26 14:42:34 device left id=20261026-144210-kill-01-1`; `2026/10/26 14:42:41 job done id=1 imageHash=d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671 wall=11.983s`.
+    - Kill 2: `2026/10/26 14:42:43 job started id=1 tiles=1024`; `2026/10/26 14:42:48 task requeued task=465 attempt=1 reason=device_disconnected`; `2026/10/26 14:42:48 task requeued task=467 attempt=1 reason=device_disconnected`; `2026/10/26 14:42:48 device left id=20261026-144210-kill-02-1`; `2026/10/26 14:42:56 job done id=1 imageHash=d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671 wall=12.505s`.
+    - Kill 3: `2026/10/26 14:42:58 job started id=1 tiles=1024`; `2026/10/26 14:43:03 task requeued task=462 attempt=1 reason=device_disconnected`; `2026/10/26 14:43:03 task requeued task=463 attempt=1 reason=device_disconnected`; `2026/10/26 14:43:03 device left id=20261026-144210-kill-03-1`; `2026/10/26 14:43:10 job done id=1 imageHash=d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671 wall=12.526s`.
+  - Summary (all rows passed; JobDone count was 1 for every run):
+
+    | Run | Done/total | Devices at completion | Requeues | Reasons | Job start before device left | Wall | Image hash |
+    | --- | ---: | ---: | ---: | --- | --- | ---: | --- |
+    | Baseline | 1024/1024 | 3 | 0 | — | yes | 10.266s | `d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671` |
+    | Kill 1 | 1024/1024 | 2 | 2 | `device_disconnected` | yes | 11.983s | `d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671` |
+    | Kill 2 | 1024/1024 | 2 | 2 | `device_disconnected` | yes | 12.505s | `d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671` |
+    | Kill 3 | 1024/1024 | 2 | 2 | `device_disconnected` | yes | 12.526s | `d639156d336839497e82937cb874cf9aa8838479424b07ed7745a6307089c671` |
+
+- Known issues / TODOs / things you were unsure about:
+  - None of the runs were invalid or failed. The baseline had no requeues, as expected; every kill run had two `device_disconnected` requeues.
+  - The first sandboxed `go test ./...` attempt could not open test loopback sockets and also printed a denied Go module cache stat-cache write; the permitted rerun passed. No custom `GOMODCACHE` was set.
+  - Raw per-run logs are kept under ignored `bench/out/` for local inspection.
+- What the next task depends on:
+  - Repeat with `-KillRuns N` after changes to lease handling or mockworker timing; use another `-Port` if the default test port is occupied.
+>>>>>>> 071907e (Bench: kill-recovery end-to-end script)
