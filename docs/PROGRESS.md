@@ -671,3 +671,25 @@
   - The dashboard can assemble the global canvas from `/api/job` and `/api/tile/{taskId}` or add a dashboard WebSocket feed.
   - Additional Web Worker threads can share the same device connection after defining task dispatch across client-side worker slots.
 
+## Run connected WASM worker through Go server (2026-10-26 15:06 Asia/Calcutta)
+- What was built:
+  - Ran the committed Go coordinator and browser WASM client together over localhost.
+  - Reassembled the finished 2048x2048 image from the server's accepted tile API and saved a temporary PNG preview.
+- Files created/changed:
+  - `docs/PROGRESS.md` — this run report.
+- Public interfaces:
+  - No interface changes; exercised `GET /worker`, `/ws/worker`, `GET /api/job`, and `GET /api/tile/{taskId}`.
+- How to run/test:
+  - `go run ./cmd/server -web wasm -addr 127.0.0.1:8181 -host 127.0.0.1` — started job 1 with 1,024 tiles.
+  - Firefox at `http://127.0.0.1:8181/worker` — connected and completed the job. The server logged benchmark hash `d6fa975fbe938c066f3baedf5b850e2418b6ec83e3ae563d0daa2d3170b156fc` and job completion in 11.073s.
+  - `curl -sS http://127.0.0.1:8181/api/job` — returned `done:1024`, `total:1024`; one device was active when queried.
+  - Node fetch of `/api/tile/0` through `/api/tile/1023` — fetched all 1,024 accepted RGBA tiles (16,777,216 bytes) successfully.
+- Decisions & deviations from this spec, and why:
+  - Ran against localhost in headless Firefox; no physical phone or LAN connection was tested.
+  - Two browser session IDs appeared in server logs during the run; one disconnected, and the job still completed.
+- Known issues / TODOs / things you were unsure about:
+  - The preview was assembled from accepted server tiles; headless Firefox did not provide a browser screenshot.
+  - A cluster-wide dashboard still needs to display tiles from every connected browser.
+- What the next task depends on:
+  - Use the printed LAN Worker URL to verify the same flow from phones on the coordinator's network.
+  - Dashboard work can poll `/api/job` and fetch accepted `/api/tile/{taskId}` payloads.
