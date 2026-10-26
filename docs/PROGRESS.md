@@ -257,3 +257,24 @@
   - HTTP tile routes, event documentation, and rendering simulator calls will be completed in the subsequent tasks.
 - What the next task depends on:
   - `internal/dashhttp` can expose `TileRGBA` and `TilesInfo` for image catch-up and per-tile requests.
+
+## Tile image HTTP endpoints (2026-10-26 12:28 Asia/Calcutta)
+- What was built:
+  - Added GET `/api/tile/{id}` with id validation, 404 for absent pixels, exact octet-stream output, and no-store caching.
+  - Added GET `/api/tiles` returning the collector's done-tile metadata for mid-run dashboard catch-up.
+  - Added tests for invalid/out-of-range/undone IDs, exact 16,384-byte tile payload, headers, and JSON metadata.
+- Files created/changed:
+  - `internal/dashhttp/dashws.go` — tile image and catch-up routes.
+  - `internal/dashhttp/dashws_test.go` — HTTP status, byte-size, payload, and metadata tests.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - GET `/api/tile/{id}` accepts integer IDs 0 through 1023 and returns `application/octet-stream`.
+  - GET `/api/tiles` returns a JSON array of `metrics.TileInfo`.
+- How to run/test:
+  - `go test -count=1 ./internal/dashhttp ./internal/metrics` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - A completed-but-unverified or wrong-length tile has metadata but no image bytes, so `/api/tile/{id}` correctly remains 404.
+- Known issues / TODOs / things you were unsure about:
+  - The revised dashboard will use `/api/tiles` for its initial completed-tile inventory and `/api/tile/{id}` for pixels.
+- What the next task depends on:
+  - Document the exact event/payload mapping and tile API contract before implementing the browser tile renderer.

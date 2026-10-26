@@ -1,6 +1,7 @@
 package dashhttp
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -70,47 +71,17 @@ func TestSlowSubscriberDoesNotBlockAnother(t *testing.T) {
 	<-active
 
 	const count = 65
-	received := make(chan []byte, count)
-	go func() {
-		for {
-			message, ok := <-active
-			if !ok {
-				return
-			}
-			received <- message
-			if string(message) == `{"type":"snapshot","n":64}` {
-				return
-			}
-		}
-	}()
-
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < count; i++ {
-			hub.Publish([]byte(`{"type":"snapshot","n":` + strconv.Itoa(i) + `}`))
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("publishing blocked on a stalled subscriber")
-	}
-
-	var last string
 	for i := 0; i < count; i++ {
+		message := `{"type":"snapshot","n":` + strconv.Itoa(i) + `}`
+		hub.Publish([]byte(message))
 		select {
-		case message := <-received:
-			last = string(message)
-			if last == `{"type":"snapshot","n":64}` {
-				i = count
+		case received := <-active:
+			if got := string(received); got != message {
+				t.Fatalf("active subscriber got %q, want %q", got, message)
 			}
-		case <-time.After(time.Second):
-			t.Fatal("active subscriber did not receive published messages")
+		default:
+			t.Fatal("publishing did not synchronously queue a message for the active subscriber")
 		}
-	}
-	if last != `{"type":"snapshot","n":64}` {
-		t.Fatalf("last active subscriber message = %q", last)
 	}
 
 	drained := 0
@@ -197,10 +168,76 @@ func TestDashboardHTTPEndpoints(t *testing.T) {
 		t.Fatal("OnRunAgain was not called before returning")
 	}
 
+	var requestedConfig string
+	hub.OnRunAgainWithConfig = func(config string) {
+		requestedConfig = config
+	}
+	configured := httptest.NewRecorder()
+	mux.ServeHTTP(configured, httptest.NewRequest(http.MethodPost, "/api/run-again?config=B", nil))
+	if configured.Code != http.StatusAccepted || requestedConfig != "B" {
+		t.Fatalf("configured run-again = %d, config %q; want 202 and B", configured.Code, requestedConfig)
+	}
+
 	methodNotAllowed := httptest.NewRecorder()
 	mux.ServeHTTP(methodNotAllowed, httptest.NewRequest(http.MethodGet, "/api/run-again", nil))
 	if methodNotAllowed.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /api/run-again status = %d, want 405", methodNotAllowed.Code)
+	}
+}
+
+func TestTileImageEndpoints(t *testing.T) {
+	collector := metrics.NewCollector()
+	collector.JobStart("tiles-api", 1024)
+	collector.DeviceJoined("laptop", "Laptop", 6)
+	pixels := bytes.Repeat([]byte{1, 2, 3, 255}, 64*64)
+	collector.TaskAccepted(0, "laptop", true, 300, 1, pixels)
+	hub := metrics.NewHub(collector)
+	defer hub.Close()
+	mux := http.NewServeMux()
+	RegisterDash(mux, hub)
+
+	for _, test := range []struct {
+		path string
+		code int
+	}{
+		{path: "/api/tile/not-number", code: http.StatusBadRequest},
+		{path: "/api/tile/1024", code: http.StatusBadRequest},
+		{path: "/api/tile/-1", code: http.StatusBadRequest},
+		{path: "/api/tile/1", code: http.StatusNotFound},
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if rec.Code != test.code {
+			t.Errorf("GET %s status = %d, want %d", test.path, rec.Code, test.code)
+		}
+	}
+
+	image := httptest.NewRecorder()
+	mux.ServeHTTP(image, httptest.NewRequest(http.MethodGet, "/api/tile/0", nil))
+	if image.Code != http.StatusOK {
+		t.Fatalf("GET /api/tile/0 status = %d, want 200: %s", image.Code, image.Body)
+	}
+	if got := image.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Errorf("tile Content-Type = %q", got)
+	}
+	if got := image.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("tile Cache-Control = %q", got)
+	}
+	if image.Body.Len() != 16384 || !bytes.Equal(image.Body.Bytes(), pixels) {
+		t.Fatalf("tile response = %d bytes, want exact 16384-byte RGBA payload", image.Body.Len())
+	}
+
+	tiles := httptest.NewRecorder()
+	mux.ServeHTTP(tiles, httptest.NewRequest(http.MethodGet, "/api/tiles", nil))
+	if tiles.Code != http.StatusOK {
+		t.Fatalf("GET /api/tiles status = %d", tiles.Code)
+	}
+	var info []metrics.TileInfo
+	if err := json.Unmarshal(tiles.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode /api/tiles response: %v", err)
+	}
+	if len(info) != 1 || info[0] != (metrics.TileInfo{Task: 0, Device: "laptop", ComputeMs: 300, Attempts: 1}) {
+		t.Fatalf("/api/tiles = %+v, want metadata for completed tile 0 only", info)
 	}
 }
 
