@@ -278,3 +278,22 @@
   - The revised dashboard will use `/api/tiles` for its initial completed-tile inventory and `/api/tile/{id}` for pixels.
 - What the next task depends on:
   - Document the exact event/payload mapping and tile API contract before implementing the browser tile renderer.
+
+## Dashboard contract documentation update (2026-10-26 12:29 Asia/Calcutta)
+- What was built:
+  - Documented the fractal canvas dimensions, tile payload, variable tile cost, and row-major 32x32 task mapping.
+  - Added the dashboard `tile_done` event and mapping from server `TILE_DONE`.
+  - Documented `/api/tile/{id}`, `/api/tiles`, the extended collector acceptance signature, scheduler mode config labels, and HELLO field ownership.
+- Files created/changed:
+  - `docs/dashboard-contract.md` — revised dashboard, tile payload, event, HTTP, HELLO, and CSV contract.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - No code interfaces changed; contract now documents `TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte)`.
+- How to run/test:
+  - Documentation-only change; no validation command was run for this step.
+- Decisions & deviations from this spec, and why:
+  - Snapshot fields remain documented exactly as implemented; tile-specific state is obtained from tile HTTP APIs and `tile_done`.
+- Known issues / TODOs / things you were unsure about:
+  - Browser UI and the simulator will be validated in subsequent tasks.
+- What the next task depends on:
+  - The simulator and UI will consume the documented tile IDs, events, and tile APIs without extending the snapshot schema.
