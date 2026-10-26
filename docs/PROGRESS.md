@@ -326,3 +326,30 @@
   - Race tests remain unavailable because the installed GCC supports only 32-bit mode; this was verified in the earlier race attempt.
 - What the next task depends on:
   - The UI can use `/api/tiles`, `/api/tile/{id}`, `tile_done`, and snapshots from this server to paint and annotate completed tiles.
+
+## Dashboard image UI checkpoint (2026-10-26 12:58 Asia/Calcutta)
+- What was built:
+  - Added a dark, projector-oriented dashboard layout with QR/join URL, summary metrics, progress, verification, chart, device list, events, and controls.
+  - Added the image canvas renderer with checker state, lease/requeue overlays, bounded eight-request image fetching, tile metadata catch-up, and per-device tint.
+  - Added tile hover details, computed per-device average timing, chart join/leave markers, reconnect backoff, fullscreen/debug/tint shortcuts, and run-again failure toast handling.
+- Files created/changed:
+  - `web/dash.html` — dashboard markup and canvas/control surfaces.
+  - `web/dash.css` — responsive dark display styling and layout.
+  - `web/dash.js` — snapshots/events, image fetch/draw, tint, chart, reconnect, and interactions.
+  - `docs/PROGRESS.md` — this checkpoint report.
+- Public interfaces:
+  - Browser uses `/api/joinurl`, `/qr.png`, `/ws/dash`, `/api/tiles`, `/api/tile/{id}`, `/api/export.csv`, and POST `/api/run-again`.
+  - No snapshot fields were added.
+- How to run/test:
+  - `node --check web/dash.js` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed; `cmd/dashdev`, `internal/dashhttp`, `internal/metrics`, `internal/proto`, and `internal/sched` passed; `cmd/server` has no tests.
+- Decisions & deviations from this spec, and why:
+  - This checkpoint contains the UI implementation in progress; browser visual acceptance and mid-run second-tab catch-up have not yet been verified.
+  - Canvas uses a 2048x2048 backing/offscreen image and scales to available CSS space; browser device-pixel ratio is applied to the visible image and chart canvases.
+- Known issues / TODOs / things you were unsure about:
+  - Full browser visual validation, image fetch throughput, average timing display behavior on catch-up, and completion-state UX remain to be checked.
+  - Race tests cannot run with the installed 32-bit-only GCC; regular tests passed.
+- What the next task depends on:
+  - Start `cmd/dashdev` at `-speed 4` and verify the render, tint, tile hover, requeue/refill, completed verification, CSV, and second-tab catch-up before marking UI complete.
