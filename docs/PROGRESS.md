@@ -1,0 +1,201 @@
+# Progress log
+
+## Scaffold and protocol (2026-10-26 10:26 Asia/Calcutta)
+
+- What was built:
+  - Initialized the Go 1.22 module and added a Windows-focused README with build, test, and run commands.
+  - Added typed JSON control-message handling for HELLO, BENCH_RESULT, REQUEST_TASK, HEARTBEAT, ACK, and JOB_DONE.
+  - Added fixed little-endian TASK and RESULT binary frame encoders/decoders with validation.
+  - Documented byte layouts and sample hex frames; added table-driven round-trip and malformed-input tests.
+- Files created/changed:
+  - `go.mod` — declares module `github.com/scrap-heap/backend` with Go 1.22 minimum.
+  - `README.md` — project stub and Windows Go commands.
+  - `cmd/server/main.go` — placeholder entry point until the coordinator is implemented.
+  - `internal/proto/proto.go` — message types and JSON/binary encoding/decoding.
+  - `internal/proto/proto_test.go` — protocol round-trip, malformed-input, and validation tests.
+  - `docs/protocol.md` — worker-facing JSON and binary wire contract with hex examples.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - `MessageType`, constants `MessageHello`, `MessageBenchResult`, `MessageRequestTask`, `MessageHeartbeat`, `MessageAck`, `MessageJobDone`.
+  - `Message`, `Task`, and `Result` structs.
+  - `EncodeJSON(Message) ([]byte, error)` and `DecodeJSON([]byte) (Message, error)`.
+  - `EncodeTask(Task) ([]byte, error)`, `DecodeTask([]byte) (Task, error)`.
+  - `EncodeResult(Result) ([]byte, error)`, `DecodeResult([]byte) (Result, error)`.
+  - Binary frame types `0x01` TASK and `0x02` RESULT; fixed headers of 45 and 17 bytes respectively.
+- How to run/test:
+  - `go fmt ./...` — passed.
+  - `go build ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go test ./...` — passed; `cmd/server` has no tests and all protocol tests passed.
+  - `go test ./... -race` — failed before test execution because `C:\MinGW\bin\gcc.exe` exited with Windows `Illegal System DLL Relocation`; ordinary tests passed without race instrumentation.
+  - Commands used a task-workspace `GOMODCACHE` after the default module cache denied writes.
+- Decisions & deviations from this spec, and why:
+  - `computeMs` is encoded as uint32 little-endian milliseconds, making the result header 17 bytes total.
+  - Module path selected as `github.com/scrap-heap/backend` because no remote module path was available.
+  - The coordinator entry point only reports that the server is not implemented yet; HTTP/WebSocket work is outside that task.
+- Known issues / TODOs / things you were unsure about:
+  - The coordinator entry point is a placeholder; HTTP/WebSocket service work remains.
+  - Race-instrumented tests remain unverified until the local GCC/Windows runtime issue is resolved.
+- What the next task depends on:
+  - Server work can use the protocol package; browser implementation should follow `docs/protocol.md`.
+
+## Protocol hardening (2026-10-26 10:34 Asia/Calcutta)
+
+- What was built:
+  - Added `jobId` to TASK and RESULT binary headers and to ACK and JOB_DONE JSON messages.
+  - Added WELCOME JSON support with heartbeat interval and timeout fields.
+  - Added tile dimension and exact payload-length checks, plus typed errors for unknown message and frame types.
+  - Updated the wire specification and expanded round-trip, stale-job, malformed-frame, and byte-layout tests.
+- Files created/changed:
+  - `internal/proto/proto.go` — updated protocol data types, encoders/decoders, validation, and typed errors.
+  - `internal/proto/proto_test.go` — round-trip, exact bytes, stale job ID, and malformed-input coverage.
+  - `docs/protocol.md` — updated JSON contract, byte tables, sizes, limits, and hex examples.
+  - `docs/PROGRESS.md` — corrected prior headings and added this report.
+  - `README.md` — updated the verification commands to include formatting and ordinary tests.
+- Public interfaces:
+  - Added `MessageWelcome`; `Message` now includes `JobID`, `HeartbeatIntervalMs`, and `HeartbeatTimeoutMs`.
+  - `Task` and `Result` now include `JobID`; TASK header is 49 bytes and RESULT header is 21 bytes.
+  - Added `MaxTileDim` (256), `UnknownMessageTypeError`, and `UnknownFrameTypeError`.
+  - Existing `EncodeJSON`, `DecodeJSON`, `EncodeTask`, `DecodeTask`, `EncodeResult`, and `DecodeResult` signatures remain unchanged.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0, with a Go module stat-cache access-denied warning from the default cache path.
+  - `go test ./...` — passed (exit 0); server package has no tests and protocol tests passed.
+  - No custom GOMODCACHE was set for this task.
+- Decisions & deviations from this spec, and why:
+  - `UnknownMessageTypeError` is returned for unknown JSON type values; `UnknownFrameTypeError` identifies unknown binary frame discriminator bytes.
+  - The protocol layer carries job IDs and documents stale-result dropping for the future server/scheduler; no server files are in this task's permitted edit scope.
+- Known issues / TODOs / things you were unsure about:
+  - The coordinator still needs to send WELCOME after accepting HELLO, increment job IDs on job start/reset, and discard results with a non-current job ID.
+  - The default Go module cache directory is not writable in this environment; Go build still returned success, but reported failure to write its stat cache.
+- What the next task depends on:
+  - Server/scheduler integration must apply the documented current-job check before accepting a RESULT and send WELCOME after HELLO acceptance.
+
+## Protocol: align with worker contract (2026-10-26 10:45 Asia/Calcutta)
+
+- What was built:
+  - Added Web Worker count to HELLO and validated a SHA-256 hex digest in BENCH_RESULT.
+  - Added JOB_STARTED support with a job ID and documented broadcast and task-request lifecycle semantics.
+  - Defined fixed benchmark tile constants and documented the kernel signature, endpoints, and frame transport.
+  - Updated JSON and binary examples and added protocol tests for the new contract.
+- Files created/changed:
+  - `internal/proto/proto.go` — extended JSON message fields/types and added benchmark tile constants/helper.
+  - `internal/proto/proto_test.go` — round-trip, invalid message, and benchmark-constant coverage.
+  - `docs/protocol.md` — worker lifecycle, endpoints, kernel contract, benchmark inputs, and refreshed wire examples.
+  - `docs/PROGRESS.md` — this task report.
+  - `README.md` — surfaced worker endpoints and protocol documentation.
+- Public interfaces:
+  - `Message` adds `Threads int` and `Hash string`; `MessageJobStarted` adds the JOB_STARTED JSON type.
+  - `BenchTileW`, `BenchTileH`, `BenchTileMaxIter`, `BenchTileX0`, `BenchTileY0`, and `BenchTileScale` define the benchmark inputs; `BenchTile() Task` returns them.
+  - JSON formats: HELLO includes `threads`; BENCH_RESULT includes `hash`; JOB_STARTED contains `jobId`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0; Go printed an access-denied warning while writing the default module stat cache.
+  - `go test ./...` — passed (exit 0); `cmd/server` has no tests and protocol tests passed.
+  - No custom GOMODCACHE was set.
+- Decisions & deviations from this spec, and why:
+  - HELLO validation requires both `cores` and `threads` to be positive.
+  - BENCH_RESULT accepts 64-character SHA-256 hexadecimal text in either letter case; its digest is computed over RGBA bytes only.
+  - `BenchTile()` returns a Task with zero job/task/attempt metadata; callers supply those fields when needed.
+- Known issues / TODOs / things you were unsure about:
+  - The coordinator and worker UI are not in this task's edit scope, so endpoint handlers, JOB_STARTED broadcasts, held-request clearing, and post-WELCOME/JOB_STARTED requests remain to be implemented by their owners.
+  - The default Go module cache is not writable; build succeeds but cannot write its stat cache.
+- What the next task depends on:
+  - Worker implementation should use the exact documented BenchTile constants and hash the returned RGBA bytes; server integration should follow the documented JOB_STARTED/WELCOME request lifecycle.
+
+## Protocol: adopt team layout (2026-10-26 10:53 Asia/Calcutta)
+
+- What was built:
+  - Changed TASK and RESULT to the canonical 48-byte and 20-byte headers, including reserved bytes, uint16 attempts, and float32 compute time.
+  - Added canonical JSON fields for HELLO and BENCH_RESULT while retaining JOB_STARTED, BenchTile, and prior protocol messages.
+  - Added CanvasSize and TileSize constants and updated pixel mapping and kernel documentation.
+  - Expanded tests for exact frame bytes, reserved-byte reads, bounds, compute time, hash/thread validation, and ignored JSON extensions.
+- Files created/changed:
+  - `internal/proto/proto.go` — canonical frame layouts and JSON types/validation.
+  - `internal/proto/proto_test.go` — exact wire vectors and malformed-input/round-trip coverage.
+  - `docs/protocol.md` — canonical contract, offsets, examples, lifecycle, render semantics, and kernel signature.
+  - `docs/PROGRESS.md` — this task report.
+  - `README.md` — current endpoint and wire-contract summary.
+- Public interfaces:
+  - `Task.Attempt` and `Result.Attempt` are `uint16`; `Result.ComputeMs` is `float32`.
+  - `CanvasSize = 2048`, `TileSize = 64`, `MaxTileDim = 256`; prior `BenchTile()` constants/helper and JSON message types remain available.
+  - HELLO includes `Mock bool`; BENCH_RESULT includes `PerThread float64` and `Threads int`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0; Go printed an access-denied warning while writing the default module stat cache.
+  - `go test ./...` — passed (exit 0); `cmd/server` has no tests and protocol tests passed.
+  - No custom GOMODCACHE was set.
+- Decisions & deviations from this spec, and why:
+  - The shared Go `Message.Attempt` is `uint16`, so JSON attempts beyond the binary protocol range are rejected during decoding.
+  - HELLO omitting `mock` decodes as false; the encoder writes the field explicitly.
+  - Unknown extra JSON fields are ignored as requested; required fields and known-field types are still validated.
+- Known issues / TODOs / things you were unsure about:
+  - The server and worker UI still need to implement the documented request limits, pixel calculations, job reset behavior, mock tagging, stale-result drop, and `process_tile` contract.
+  - The default Go module cache is not writable; build succeeds but cannot write its stat cache.
+- What the next task depends on:
+  - Worker/server integration should use the documented canonical offsets and preserve the per-pixel coordinate formula exactly.
+
+## Sched: pure scheduler state machine (2026-10-26 11:24 Asia/Calcutta)
+
+- What was built:
+  - Added an event-driven scheduler with injected event timestamps, typed events/actions, and no networking, goroutines, or wall-clock reads.
+  - Implemented plain pull and capability-aware heavy/light queues, worker thread request limits, leases, expiry/disconnect/reset requeues, and end-game duplicate attempts.
+  - Added first-valid-result handling, stale and duplicate drop metrics, held request dispatch, and one-shot JobDone signaling.
+  - Added fake-time tests including a deterministic 1,024-tile, three-device completion simulation.
+- Files created/changed:
+  - `internal/sched/scheduler.go` — pure scheduler state machine, events, actions, queues, and lease policy.
+  - `internal/sched/scheduler_test.go` — fake-time lifecycle, affinity, limits, retries, end-game, and full-job tests.
+  - `docs/PROGRESS.md` — this task report.
+- Public interfaces:
+  - `New(mode Mode) *Scheduler` and `(*Scheduler).Handle(ev Event) []Action`.
+  - Modes: `PlainPull` and `CapabilityAware`.
+  - Events: `StartJob`, `DeviceJoined`, `DeviceLeft`, `TaskRequested`, `ResultReceived`, `Tick`, and `Reset`.
+  - Actions: `AssignTask`, `JobDone`, `DropRequests`, `Requeued`, `DuplicateDropped`, and `StaleDropped`.
+  - `Tile` combines `proto.Task` render parameters with `EstimatedCost`.
+- How to run/test:
+  - `go fmt ./...` — passed (exit 0).
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — returned exit 0; Go printed an access-denied warning while writing the default module stat cache.
+  - `go test ./...` — passed (exit 0); protocol and scheduler packages passed, server package has no tests.
+  - `rg -n "time\\.Now|go func|go " internal/sched` — no matches.
+  - No custom GOMODCACHE was set.
+- Decisions & deviations from this spec, and why:
+  - Device thread IDs are zero-based and must be less than the joined device's `threads` count.
+  - Even-sized medians use the arithmetic mean of the two central values; ties are stable by input/task order where relevant.
+  - Attempt IDs stop at uint16 max rather than wrapping to zero.
+  - No Scheduler semantics section was added to `docs/protocol.md`; its existing request-cap, no-prefetch, reset, and job lifecycle semantics do not contradict this implementation.
+- Known issues / TODOs / things you were unsure about:
+  - The caller must validate incoming device/job data and perform the actual network sends and metric export.
+  - Speed is supplied by the caller in estimated-cost units per second; the server should compute it as `benchTilesPerSec * benchTileCost`.
+- What the next task depends on:
+  - Server integration should own one Scheduler from one goroutine, add `Now` to each event, forward returned actions, and translate accepted result/job completion state into dashboard and metric events.
+
+## Dashboard branch alignment (2026-10-26 11:55 Asia/Calcutta)
+- What was built:
+  - Preserved the in-progress dashboard HTTP code in commit `72b712d` and merged `origin/main` into the dedicated `r4-dashboard` branch.
+  - Kept the team versions of `AGENTS.md`, `README.md`, `cmd/server/main.go`, `docs/PROGRESS.md`, `docs/protocol.md`, `internal/proto`, and `internal/sched`.
+  - Aligned the module path with `github.com/scrap-heap/backend`, restored the Go 1.22 directive, and added the allowed WebSocket and QR dependencies.
+  - Removed the Makefile and updated dashboard imports to the shared module path.
+- Files created/changed:
+  - `AGENTS.md`, `README.md`, `cmd/server/main.go`, `docs/protocol.md`, `internal/proto/*`, and `internal/sched/*` — preserved from `origin/main`.
+  - `go.mod`, `go.sum` — shared module path and required dependencies; `github.com/coder/websocket` uses v1.8.13 to retain Go 1.22 compatibility.
+  - `cmd/server/qr.go`, `cmd/server/dashws.go`, `internal/dashhttp/*` — dashboard helpers and HTTP endpoints with corrected imports.
+  - `Makefile` — removed as required; `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - Module path: `github.com/scrap-heap/backend`.
+  - Existing dashboard wrappers: `RegisterQR(*http.ServeMux, string)` and `RegisterDash(*http.ServeMux, *metrics.Hub)`.
+- How to run/test:
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed (exit 0); `internal/dashhttp`, `internal/metrics`, `internal/proto`, and `internal/sched` passed; `cmd/server` has no tests.
+- Decisions & deviations from this spec, and why:
+  - The existing WebSocket v1.8.15 requires Go 1.23, so v1.8.13 was selected after confirming its Go directive is 1.19; the dashboard HTTP implementation only uses the same allowed module.
+  - The `go mod tidy -go=1.22` invocation was rejected by the installed Go tool; the module directive was restored directly and ordinary `go mod tidy` then passed.
+- Known issues / TODOs / things you were unsure about:
+  - The preserved QR and dashboard HTTP code still needs the endpoint behavior and LAN-selection refinements listed in the next dashboard task.
+  - The remote team branch was fetched and merged locally; nothing has been pushed.
+- What the next task depends on:
+  - Implement and test the full dashboard HTTP contract in `internal/dashhttp`, building on the aligned module and team protocol/scheduler packages.

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/sparshgupta001/scrapheap/internal/metrics"
+	"github.com/scrap-heap/backend/internal/metrics"
 )
 
 // RegisterDash registers the WebSocket, CSV export, and run-again endpoints.

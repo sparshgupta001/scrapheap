@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sparshgupta001/scrapheap/internal/metrics"
+	"github.com/scrap-heap/backend/internal/metrics"
 )
 
 func TestRegisterDashEndpoints(t *testing.T) {
