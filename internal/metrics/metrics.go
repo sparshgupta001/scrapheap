@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -15,6 +16,14 @@ type deviceInternal struct {
 	tilesDone   int
 	state       string // "active" | "idle" | "gone"
 	completions []time.Time
+}
+
+type tileInternal struct {
+	deviceID  string
+	computeMs uint32
+	attempt   uint32
+	attempts  int
+	rgba      []byte
 }
 
 // Collector collects cluster metrics and device states in a thread-safe manner.
@@ -32,17 +41,20 @@ type Collector struct {
 	verifiedOK        int
 	verifiedFail      int
 	tileStates        []byte
+	tiles             []tileInternal
 	assignedDevices   map[int]string
 	devices           map[string]*deviceInternal
 	deviceOrder       []string
+	runDevices        map[string]struct{}
 	globalCompletions []time.Time
 	window            time.Duration
 
 	// Optional run tracking for CSV
-	config   string
-	bytesIn  int64
-	bytesOut int64
-	runs     []RunRecord
+	baseline      bool
+	schedulerMode string
+	bytesIn       int64
+	bytesOut      int64
+	runs          []RunRecord
 
 	listeners []func(any)
 	nowFunc   func() time.Time
@@ -54,6 +66,8 @@ func NewCollector() *Collector {
 		jobState:        "idle",
 		assignedDevices: make(map[int]string),
 		devices:         make(map[string]*deviceInternal),
+		runDevices:      make(map[string]struct{}),
+		schedulerMode:   "pull",
 		window:          3 * time.Second,
 		nowFunc:         time.Now,
 	}
@@ -73,11 +87,22 @@ func (c *Collector) SetWindow(w time.Duration) {
 	c.window = w
 }
 
-// SetConfig sets the config label for the current/next run (e.g., "B" for baseline).
+// SetConfig marks whether the next run is the laptop-only baseline.
 func (c *Collector) SetConfig(cfg string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.config = cfg
+	c.baseline = cfg == "B"
+}
+
+// SetScheduler selects the scheduler mode used in subsequent CSV run records.
+func (c *Collector) SetScheduler(mode string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if mode == "aware" {
+		c.schedulerMode = "aware"
+		return
+	}
+	c.schedulerMode = "pull"
 }
 
 // RecordBytes tracks network I/O for the current run.
@@ -253,6 +278,9 @@ func (c *Collector) DeviceJoined(id, label string, threads int) {
 		}
 	}
 	lbl := dev.label
+	if c.jobState == "running" {
+		c.runDevices[id] = struct{}{}
+	}
 	t := c.elapsedLocked()
 	c.mu.Unlock()
 
@@ -288,24 +316,37 @@ func (c *Collector) TaskAssigned(taskID int, deviceID string) {
 	if taskID >= 0 && taskID < len(c.tileStates) {
 		if c.tileStates[taskID] != 'D' {
 			c.tileStates[taskID] = 'L'
+			c.tiles[taskID].attempts++
 		}
 	}
 	c.assignedDevices[taskID] = deviceID
 }
 
-// TaskAccepted records completion of a task, updating state to "D", verified counters, and rolling rate.
-func (c *Collector) TaskAccepted(taskID int, deviceID string, verifiedOK bool) {
+// TaskAccepted records a result, retaining pixels only for correctly sized verified data.
+func (c *Collector) TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	if taskID < 0 || taskID >= len(c.tileStates) {
+		c.mu.Unlock()
+		return
+	}
+	if c.tileStates[taskID] == 'D' {
+		c.dupesDropped++
+		c.mu.Unlock()
+		return
+	}
 	now := c.now()
-	if taskID >= 0 && taskID < len(c.tileStates) {
-		if c.tileStates[taskID] == 'D' {
-			c.dupesDropped++
-			return
-		}
-		c.tileStates[taskID] = 'D'
-		c.doneCount++
+	c.tileStates[taskID] = 'D'
+	c.doneCount++
+	tile := &c.tiles[taskID]
+	tile.deviceID = deviceID
+	tile.computeMs = computeMs
+	tile.attempt = attempt
+	if tile.attempts < int(attempt) {
+		tile.attempts = int(attempt)
+	}
+	tile.rgba = nil
+	if verifiedOK && len(rgba) == tileRGBABytes {
+		tile.rgba = append([]byte(nil), rgba...)
 	}
 
 	if verifiedOK {
@@ -320,6 +361,17 @@ func (c *Collector) TaskAccepted(taskID int, deviceID string, verifiedOK bool) {
 		dev.tilesDone++
 		dev.completions = append(dev.completions, now)
 	}
+	t := c.elapsedLocked()
+	c.mu.Unlock()
+
+	c.emit(TileDoneEvent{
+		Type:      "tile_done",
+		Task:      taskID,
+		Device:    deviceID,
+		ComputeMs: computeMs,
+		Attempt:   attempt,
+		T:         t,
+	})
 }
 
 // TaskRequeued marks a task as requeued ("R") and emits a tile_requeued event.
@@ -367,10 +419,12 @@ func (c *Collector) JobStart(jobID string, totalTiles int) {
 	c.globalCompletions = nil
 
 	c.tileStates = make([]byte, totalTiles)
+	c.tiles = make([]tileInternal, totalTiles)
 	for i := range c.tileStates {
 		c.tileStates[i] = 'Q'
 	}
 	c.assignedDevices = make(map[int]string)
+	c.runDevices = make(map[string]struct{})
 
 	for _, dev := range c.devices {
 		dev.tilesDone = 0
@@ -392,10 +446,12 @@ func (c *Collector) JobDone(finalChecksum string) {
 	if wallS <= 0 {
 		wallS = t
 	}
-	totalDevices := len(c.devices)
+	totalDevices := len(c.runDevices)
 	totalThreads := 0
-	for _, d := range c.devices {
-		totalThreads += d.threads
+	for id := range c.runDevices {
+		if device := c.devices[id]; device != nil {
+			totalThreads += device.threads
+		}
 	}
 	tiles := c.verifiedOK + c.verifiedFail
 	tilesPerSec := 0.0
@@ -403,9 +459,13 @@ func (c *Collector) JobDone(finalChecksum string) {
 		tilesPerSec = float64(tiles) / wallS
 	}
 
+	config := fmt.Sprintf("%s+%d", c.schedulerMode, max(len(c.runDevices)-1, 0))
+	if c.baseline {
+		config = "B"
+	}
 	record := RunRecord{
 		RunID:        c.jobID,
-		Config:       c.config,
+		Config:       config,
 		Devices:      totalDevices,
 		Threads:      totalThreads,
 		WallS:        wallS,
@@ -419,6 +479,7 @@ func (c *Collector) JobDone(finalChecksum string) {
 		BytesIn:      c.bytesIn,
 		BytesOut:     c.bytesOut,
 	}
+
 	c.runs = append(c.runs, record)
 	c.mu.Unlock()
 
@@ -427,6 +488,39 @@ func (c *Collector) JobDone(finalChecksum string) {
 		T:             t,
 		FinalChecksum: finalChecksum,
 	})
+}
+
+const tileRGBABytes = 64 * 64 * 4
+
+// TileRGBA returns a copy of a completed tile's verified RGBA pixels.
+func (c *Collector) TileRGBA(taskID int) ([]byte, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if taskID < 0 || taskID >= len(c.tileStates) || c.tileStates[taskID] != 'D' ||
+		len(c.tiles[taskID].rgba) != tileRGBABytes {
+		return nil, false
+	}
+	return append([]byte(nil), c.tiles[taskID].rgba...), true
+}
+
+// TilesInfo returns metadata for completed tiles in task order.
+func (c *Collector) TilesInfo() []TileInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]TileInfo, 0, c.doneCount)
+	for task, state := range c.tileStates {
+		if state != 'D' {
+			continue
+		}
+		tile := c.tiles[task]
+		result = append(result, TileInfo{
+			Task:      task,
+			Device:    tile.deviceID,
+			ComputeMs: tile.computeMs,
+			Attempts:  tile.attempts,
+		})
+	}
+	return result
 }
 
 // Snapshot generates the current system snapshot.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"sort"
 	"strconv"
 )
 
@@ -53,7 +54,12 @@ func FormatCSV(runs []RunRecord) string {
 		}
 	}
 
-	for _, r := range runs {
+	orderedRuns := append([]RunRecord(nil), runs...)
+	sort.SliceStable(orderedRuns, func(i, j int) bool {
+		return orderedRuns[i].Config == "B" && orderedRuns[j].Config != "B"
+	})
+
+	for _, r := range orderedRuns {
 		speedupStr := ""
 		efficiencyStr := ""
 

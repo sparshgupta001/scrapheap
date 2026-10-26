@@ -50,6 +50,25 @@ type TileRequeuedEvent struct {
 	T      float64 `json:"t"`
 }
 
+// TileDoneEvent reports an accepted task and maps the server's TILE_DONE event
+// onto the dashboard event name.
+type TileDoneEvent struct {
+	Type      string  `json:"type"`
+	Task      int     `json:"task"`
+	Device    string  `json:"device"`
+	ComputeMs uint32  `json:"computeMs"`
+	Attempt   uint32  `json:"attempt"`
+	T         float64 `json:"t"`
+}
+
+// TileInfo is the lightweight metadata returned for completed tiles.
+type TileInfo struct {
+	Task      int    `json:"task"`
+	Device    string `json:"device"`
+	ComputeMs uint32 `json:"computeMs"`
+	Attempts  int    `json:"attempts"`
+}
+
 // JobDoneEvent is emitted when a job finishes.
 type JobDoneEvent struct {
 	Type          string  `json:"type"` // "job_done"

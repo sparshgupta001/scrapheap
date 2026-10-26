@@ -230,3 +230,30 @@
   - `cmd/dashdev`, dashboard UI, README handoff, and live simulator verification remain.
 - What the next task depends on:
   - The dashboard dev server can use the completed collector, Hub, QR, WebSocket, CSV, and run-again APIs.
+
+## Metrics tile payload and workload metadata (2026-10-26 12:27 Asia/Calcutta)
+- What was built:
+  - Expanded accepted-task recording with compute time, attempt number, verified 64x64 RGBA storage, and first-result-wins duplicate handling.
+  - Added the `tile_done` dashboard event, completed-tile metadata, and copied pixel retrieval methods.
+  - Added scheduler-mode-based CSV config labels and moved baseline `B` rows before other runs.
+  - Updated and added tests for event emission, duplicate payloads, tile queries, pixel length, and CSV configs.
+- Files created/changed:
+  - `internal/metrics/metrics.go` — stored tile info and pixels, scheduler config, and extended acceptance API.
+  - `internal/metrics/snapshot.go` — `TileDoneEvent` and `TileInfo` types; snapshot fields unchanged.
+  - `internal/metrics/csv.go` — baseline-first ordering.
+  - `internal/metrics/metrics_test.go` — acceptance, metadata, event, and config coverage.
+  - `cmd/dashdev/sim.go` — updated call signature pending full simulator rendering implementation.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - `TaskAccepted(taskID int, deviceID string, verifiedOK bool, computeMs uint32, attempt uint32, rgba []byte)`.
+  - `TileRGBA(taskID int) ([]byte, bool)`, `TilesInfo() []TileInfo`, `SetScheduler(mode string)`.
+  - `TileInfo` JSON fields: `task`, `device`, `computeMs`, `attempts`; `tile_done` JSON fields: `type`, `task`, `device`, `computeMs`, `attempt`, `t`.
+- How to run/test:
+  - `go test -count=1 ./internal/metrics` — passed (exit 0).
+- Decisions & deviations from this spec, and why:
+  - Only a verified tile with exactly 16,384 RGBA bytes retains pixels; failed verification and malformed lengths retain metadata but have no retrievable pixel bytes.
+  - The existing `SetConfig("B")` hook marks baseline status; other CSV config values are generated from `SetScheduler` and the run's joined-device count.
+- Known issues / TODOs / things you were unsure about:
+  - HTTP tile routes, event documentation, and rendering simulator calls will be completed in the subsequent tasks.
+- What the next task depends on:
+  - `internal/dashhttp` can expose `TileRGBA` and `TilesInfo` for image catch-up and per-tile requests.

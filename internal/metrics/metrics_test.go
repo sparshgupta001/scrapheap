@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -13,7 +14,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 	c.JobStart("run-3", 10)
 	c.DeviceJoined("d1", "Laptop", 6)
 	c.TaskAssigned(0, "d1")
-	c.TaskAccepted(0, "d1", true)
+	c.TaskAccepted(0, "d1", true, 240, 1, nil)
 	c.TaskRequeued(1, "lease")
 	c.DupDropped(0)
 
@@ -64,6 +65,96 @@ func TestSnapshotJSONContract(t *testing.T) {
 	}
 }
 
+func TestTilePixelsMetadataAndDoneEvent(t *testing.T) {
+	c := NewCollector()
+	c.JobStart("tile-data", 4)
+	c.DeviceJoined("laptop", "Laptop", 6)
+	c.TaskAssigned(0, "laptop")
+	c.TaskAssigned(0, "laptop")
+
+	var events []TileDoneEvent
+	c.OnEvent(func(event any) {
+		if tileDone, ok := event.(TileDoneEvent); ok {
+			events = append(events, tileDone)
+		}
+	})
+	pixels := bytes.Repeat([]byte{12, 34, 56, 255}, 64*64)
+	c.TaskAccepted(0, "laptop", true, 312, 2, pixels)
+	c.TaskAccepted(0, "phone", true, 900, 3, bytes.Repeat([]byte{1}, tileRGBABytes))
+
+	if len(events) != 1 {
+		t.Fatalf("tile_done events = %d, want 1", len(events))
+	}
+	if events[0].Type != "tile_done" || events[0].Task != 0 || events[0].Device != "laptop" ||
+		events[0].ComputeMs != 312 || events[0].Attempt != 2 {
+		t.Errorf("tile_done event = %+v", events[0])
+	}
+	stored, ok := c.TileRGBA(0)
+	if !ok || len(stored) != tileRGBABytes {
+		t.Fatalf("TileRGBA(0) = %d bytes, %v; want %d bytes, true", len(stored), ok, tileRGBABytes)
+	}
+	if !bytes.Equal(stored, pixels) {
+		t.Fatal("duplicate acceptance overwrote the first tile's pixels")
+	}
+	if _, ok := c.TileRGBA(1); ok {
+		t.Fatal("TileRGBA returned pixels for an undone tile")
+	}
+	info := c.TilesInfo()
+	if len(info) != 1 || info[0] != (TileInfo{Task: 0, Device: "laptop", ComputeMs: 312, Attempts: 2}) {
+		t.Fatalf("TilesInfo() = %+v, want only accepted tile with its final metadata", info)
+	}
+	snapshot := c.Snapshot()
+	if snapshot.DupesDropped != 1 || snapshot.Done != 1 || snapshot.VerifiedOK != 1 {
+		t.Fatalf("duplicate acceptance changed counters: %+v", snapshot)
+	}
+}
+
+func TestWrongLengthRGBAIsNotStored(t *testing.T) {
+	c := NewCollector()
+	c.JobStart("wrong-pixels", 2)
+	c.DeviceJoined("phone", "Phone", 2)
+	c.TaskAccepted(0, "phone", true, 180, 1, []byte{1, 2, 3})
+	if pixels, ok := c.TileRGBA(0); ok || pixels != nil {
+		t.Fatalf("TileRGBA for wrong-sized data = %d bytes, %v; want nil, false", len(pixels), ok)
+	}
+	info := c.TilesInfo()
+	if len(info) != 1 || info[0].Task != 0 {
+		t.Fatalf("TilesInfo() = %+v, want completed tile metadata even without pixels", info)
+	}
+}
+
+func TestRunConfigUsesSchedulerModeAndPhoneCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		baseline  bool
+		deviceIDs []string
+		want      string
+	}{
+		{name: "default pull", deviceIDs: []string{"laptop", "phone-1", "phone-2"}, want: "pull+2"},
+		{name: "aware", mode: "aware", deviceIDs: []string{"laptop", "p1", "p2", "p3"}, want: "aware+3"},
+		{name: "baseline", mode: "aware", baseline: true, deviceIDs: []string{"laptop"}, want: "B"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewCollector()
+			c.SetScheduler(test.mode)
+			if test.baseline {
+				c.SetConfig("B")
+			}
+			c.JobStart("config", 0)
+			for _, id := range test.deviceIDs {
+				c.DeviceJoined(id, id, 1)
+			}
+			c.JobDone("checksum")
+			runs := c.GetRuns()
+			if len(runs) != 1 || runs[0].Config != test.want {
+				t.Fatalf("run config = %+v, want %q", runs, test.want)
+			}
+		})
+	}
+}
+
 func TestRollingTilesPerSec(t *testing.T) {
 	c := NewCollector()
 	baseTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -80,7 +171,7 @@ func TestRollingTilesPerSec(t *testing.T) {
 	// Complete 6 tiles over 2 seconds (3 tiles/sec)
 	for i := 0; i < 6; i++ {
 		currentTime = currentTime.Add(333 * time.Millisecond)
-		c.TaskAccepted(i, "d1", true)
+		c.TaskAccepted(i, "d1", true, 240, 1, nil)
 	}
 
 	snap := c.Snapshot()
@@ -132,7 +223,7 @@ func TestRequeueMarksTileR(t *testing.T) {
 	}
 
 	// Complete task 2 -> 'D'
-	c.TaskAccepted(2, "d1", true)
+	c.TaskAccepted(2, "d1", true, 240, 1, nil)
 	snap = c.Snapshot()
 	if snap.TileStates != "QQDQQ" {
 		t.Fatalf("expected 'QQDQQ', got %s", snap.TileStates)
@@ -168,9 +259,9 @@ func TestDeviceReconnectPreservesTilesDone(t *testing.T) {
 	// Device joins
 	c.DeviceJoined("phone-1", "Pixel 7", 4)
 	c.TaskAssigned(0, "phone-1")
-	c.TaskAccepted(0, "phone-1", true)
+	c.TaskAccepted(0, "phone-1", true, 240, 1, nil)
 	c.TaskAssigned(1, "phone-1")
-	c.TaskAccepted(1, "phone-1", true)
+	c.TaskAccepted(1, "phone-1", true, 240, 1, nil)
 
 	snap := c.Snapshot()
 	if len(snap.Devices) != 1 {
@@ -263,6 +354,7 @@ func TestCSVHeaderAndSpeedupEfficiencyMath(t *testing.T) {
 			BytesOut:     2048,
 		},
 	}
+
 	csvOut := FormatCSV(runsNoBaseline)
 	lines := strings.Split(strings.TrimSpace(csvOut), "\n")
 	if len(lines) != 2 {
@@ -338,6 +430,23 @@ func TestCSVHeaderAndSpeedupEfficiencyMath(t *testing.T) {
 	}
 }
 
+func TestCSVPlacesBaselineFirst(t *testing.T) {
+	csvText := FormatCSV([]RunRecord{
+		{RunID: "cluster", Config: "A", Devices: 4, WallS: 20},
+		{RunID: "baseline", Config: "B", Devices: 1, WallS: 100},
+	})
+	lines := strings.Split(strings.TrimSpace(csvText), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("CSV lines = %d, want header and two runs", len(lines))
+	}
+	if !strings.HasPrefix(lines[1], "baseline,B,") {
+		t.Fatalf("first CSV run = %q, want baseline B first", lines[1])
+	}
+	if !strings.Contains(lines[2], ",5.00,1.25,") {
+		t.Fatalf("cluster speedup/efficiency missing from row: %q", lines[2])
+	}
+}
+
 func TestCollectorConcurrency50Goroutines(t *testing.T) {
 	c := NewCollector()
 	c.JobStart("race-check-50", 1000)
@@ -357,7 +466,7 @@ func TestCollectorConcurrency50Goroutines(t *testing.T) {
 					c.TaskRequeued(task, "lease")
 					c.TaskAssigned(task, id)
 				}
-				c.TaskAccepted(task, id, true)
+				c.TaskAccepted(task, id, true, 240, 1, nil)
 			}
 			_ = c.Snapshot()
 			if idx%3 == 0 {
