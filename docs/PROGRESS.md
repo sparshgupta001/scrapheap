@@ -199,3 +199,34 @@
   - The remote team branch was fetched and merged locally; nothing has been pushed.
 - What the next task depends on:
   - Implement and test the full dashboard HTTP contract in `internal/dashhttp`, building on the aligned module and team protocol/scheduler packages.
+
+## Dashboard HTTP and subscription contract (2026-10-26 11:55 Asia/Calcutta)
+- What was built:
+  - Implemented pure LAN IPv4 selection with interface-name filtering, RFC1918 preference ordering, `JOIN_HOST` override, and clear JSON 503 responses when no address is available.
+  - Added 512px no-store QR PNG and join URL handlers, plus CSV download and run-again responses with the specified status codes and header.
+  - Reworked the dashboard Hub around 64-message buffered subscriptions, immediate snapshot delivery, raw JSON publishing, subscriber counts, nonblocking fan-out, and 15-second WebSocket pings.
+  - Added endpoint, WebSocket lifecycle/fan-out, stalled-subscriber, QR selection, PNG signature, CSV header, and run-again tests.
+- Files created/changed:
+  - `internal/dashhttp/qr.go` — LAN selection, join URL, and QR HTTP handlers.
+  - `internal/dashhttp/dashws.go` — dashboard WebSocket, CSV, and run-again HTTP routes.
+  - `internal/dashhttp/qr_test.go`, `internal/dashhttp/dashws_test.go` — endpoint and subscription behavior tests.
+  - `internal/metrics/hub.go` — `Subscribe`, `Publish`, `CurrentSnapshotJSON`, `SubscriberCount`, and WebSocket streaming lifecycle.
+  - `docs/PROGRESS.md` — this report.
+- Public interfaces:
+  - `(*Hub).Subscribe() (<-chan []byte, func())`, `(*Hub).Publish([]byte)`, `(*Hub).CurrentSnapshotJSON() []byte`, and `(*Hub).SubscriberCount() int`.
+  - `(*Hub).OnRunAgain func()` — callback used by POST `/api/run-again`.
+  - `RegisterQR(*http.ServeMux, string)` and `RegisterDash(*http.ServeMux, *metrics.Hub)`.
+- How to run/test:
+  - `go vet ./...` — passed (exit 0).
+  - `go build ./...` — passed (exit 0).
+  - `go test -count=1 ./...` — passed (exit 0); all 4 tested packages passed and `cmd/server` has no tests.
+  - `go test -count=1 ./internal/dashhttp ./internal/metrics` — passed after the final endpoint test update.
+  - `go test -race ./...` — failed before tests ran: `cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`; this machine's GCC cannot build the race runtime.
+- Decisions & deviations from this spec, and why:
+  - A subscriber whose 64-message queue fills is removed and its channel closed; this preserves nonblocking delivery to other subscribers and bounds per-client memory.
+  - `JOIN_HOST` is accepted as the host override verbatim after trimming whitespace; otherwise only usable non-loopback IPv4 addresses are considered.
+- Known issues / TODOs / things you were unsure about:
+  - Real phone QR scanning is not verified in this environment.
+  - `cmd/dashdev`, dashboard UI, README handoff, and live simulator verification remain.
+- What the next task depends on:
+  - The dashboard dev server can use the completed collector, Hub, QR, WebSocket, CSV, and run-again APIs.

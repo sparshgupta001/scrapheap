@@ -2,6 +2,7 @@ package dashhttp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,141 +12,180 @@ import (
 	"github.com/skip2/go-qrcode"
 )
 
-// SelectPreferredIP returns the highest-priority IPv4 address from a candidate list.
-// Priority:
-// 1. 192.168.x.x
-// 2. 10.x.x.x
-// 3. 172.16.0.0 - 172.31.255.255
-// 4. Any other non-loopback IPv4
-// 5. Fallback: "127.0.0.1"
-func SelectPreferredIP(candidates []string) string {
-	bestScore := -1
-	bestIP := "127.0.0.1"
+type lanCandidate struct {
+	interfaceName string
+	address       string
+}
 
-	for _, raw := range candidates {
-		ip := net.ParseIP(strings.TrimSpace(raw))
-		if ip == nil {
+var errNoLANIPv4 = errors.New("no usable LAN IPv4 address found; set JOIN_HOST to override")
+
+// pickLANIPv4 chooses an IPv4 address without consulting the machine's network state.
+func pickLANIPv4(candidates []lanCandidate) (string, bool) {
+	bestIP := ""
+	bestPriority := -1
+
+	for _, candidate := range candidates {
+		interfaceName := strings.ToLower(candidate.interfaceName)
+		if isVirtualInterface(interfaceName) {
 			continue
 		}
+
+		ip := net.ParseIP(strings.TrimSpace(candidate.address))
 		ip4 := ip.To4()
-		if ip4 == nil || ip4.IsLoopback() {
+		if ip4 == nil || ip4.IsLoopback() || ip4.IsUnspecified() || ip4[0] == 169 && ip4[1] == 254 {
 			continue
 		}
 
-		score := 40 // general IPv4
-		b0 := ip4[0]
-		b1 := ip4[1]
-
-		if b0 == 192 && b1 == 168 {
-			score = 100
-		} else if b0 == 10 {
-			score = 80
-		} else if b0 == 172 && (b1 >= 16 && b1 <= 31) {
-			score = 60
+		priority := 0
+		switch {
+		case ip4[0] == 192 && ip4[1] == 168:
+			priority = 3
+		case ip4[0] == 10:
+			priority = 2
+		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
+			priority = 1
 		}
 
-		if score > bestScore {
-			bestScore = score
+		if priority > bestPriority {
 			bestIP = ip4.String()
+			bestPriority = priority
 		}
 	}
 
-	return bestIP
+	return bestIP, bestIP != ""
 }
 
 func isVirtualInterface(name string) bool {
-	lower := strings.ToLower(name)
-	virtualNames := []string{
-		"docker", "veth", "wsl", "hyper-v", "virtual", "vbox",
-		"vmnet", "virbr", "tap", "tun", "vethernet",
-	}
-	for _, v := range virtualNames {
-		if strings.Contains(lower, v) {
+	for _, marker := range []string{
+		"docker", "veth", "vethernet", "wsl", "virtualbox", "vmware",
+		"hyper-v", "loopback", "bluetooth",
+	} {
+		if strings.Contains(name, marker) {
 			return true
 		}
 	}
 	return false
 }
 
-// DetectLANIP discovers the primary local area network IPv4 address.
-// If the environment variable JOIN_HOST is set, it takes precedence.
-func DetectLANIP() string {
-	if env := os.Getenv("JOIN_HOST"); env != "" {
-		return strings.TrimSpace(env)
+func detectLANIPv4() (string, error) {
+	if host := strings.TrimSpace(os.Getenv("JOIN_HOST")); host != "" {
+		return host, nil
 	}
 
-	ifaces, err := net.Interfaces()
+	interfaces, err := net.Interfaces()
 	if err != nil {
-		return "127.0.0.1"
+		return "", fmt.Errorf("list network interfaces: %w", err)
 	}
 
-	var candidates []string
-	for _, iface := range ifaces {
-		// Skip interfaces that are down, loopback, or virtual/docker adapters
-		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
-			continue
-		}
-		if isVirtualInterface(iface.Name) {
+	candidates := make([]lanCandidate, 0)
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 
-		addrs, err := iface.Addrs()
+		addresses, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
-		for _, addr := range addrs {
+		for _, address := range addresses {
 			var ip net.IP
-			switch v := addr.(type) {
+			switch address := address.(type) {
 			case *net.IPNet:
-				ip = v.IP
+				ip = address.IP
 			case *net.IPAddr:
-				ip = v.IP
+				ip = address.IP
 			}
-			if ip != nil && ip.To4() != nil && !ip.IsLoopback() {
-				candidates = append(candidates, ip.To4().String())
+			if ip != nil {
+				candidates = append(candidates, lanCandidate{
+					interfaceName: iface.Name,
+					address:       ip.String(),
+				})
 			}
 		}
 	}
 
-	return SelectPreferredIP(candidates)
-}
-
-// CleanPort strips leading colons and defaults to "8080".
-func CleanPort(port string) string {
-	p := strings.TrimPrefix(strings.TrimSpace(port), ":")
-	if p == "" {
-		p = "8080"
+	ip, ok := pickLANIPv4(candidates)
+	if !ok {
+		return "", errNoLANIPv4
 	}
-	return p
+	return ip, nil
 }
 
-// BuildJoinURL constructs the worker join URL for the given host/port.
-func BuildJoinURL(port string) string {
-	host := DetectLANIP()
-	p := CleanPort(port)
-	return fmt.Sprintf("http://%s:%s/worker", host, p)
+func cleanPort(port string) string {
+	port = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(port), ":"))
+	if port == "" {
+		return "8080"
+	}
+	return port
 }
 
-// RegisterQR registers the /api/joinurl and /qr.png endpoints on the provided mux.
+func buildJoinURL(port, host string) (string, error) {
+	if strings.TrimSpace(host) == "" {
+		return "", errNoLANIPv4
+	}
+	return fmt.Sprintf("http://%s:%s/worker", host, cleanPort(port)), nil
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// RegisterQR registers the worker join URL and QR image endpoints.
 func RegisterQR(mux *http.ServeMux, port string) {
+	registerQR(mux, port, detectLANIPv4)
+}
+
+func registerQR(mux *http.ServeMux, port string, getHost func() (string, error)) {
 	mux.HandleFunc("/api/joinurl", func(w http.ResponseWriter, r *http.Request) {
-		joinURL := BuildJoinURL(port)
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		host, err := getHost()
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		joinURL, err := buildJoinURL(port, host)
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"url": joinURL,
-		})
+		_ = json.NewEncoder(w).Encode(map[string]string{"url": joinURL})
 	})
 
 	mux.HandleFunc("/qr.png", func(w http.ResponseWriter, r *http.Request) {
-		joinURL := BuildJoinURL(port)
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		host, err := getHost()
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		joinURL, err := buildJoinURL(port, host)
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		png, err := qrcode.Encode(joinURL, qrcode.Medium, 512)
 		if err != nil {
-			http.Error(w, "failed to generate qr code", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "failed to generate QR code")
 			return
 		}
 		w.Header().Set("Content-Type", "image/png")
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(png)
+		if _, err := w.Write(png); err != nil {
+			return
+		}
 	})
 }
